@@ -6,7 +6,7 @@
 
 ## 1. Tóm tắt
 
-Costume Rental Studio là web nghiệp vụ cho thuê trang phục. Costume Rental Ops Agent là một nhánh sản phẩm được phát triển trong repo riêng, bắt đầu từ bản sao frontend/UI/UX và tài liệu dùng được của Studio, rồi bổ sung năng lực Ops Agent cho nhân viên vận hành.
+Costume Rental Studio là web nghiệp vụ cho thuê trang phục. Costume Rental Ops Agent là một ứng dụng độc lập, dùng cùng định hướng giao diện và các luồng nền của Studio rồi bổ sung năng lực Ops Agent cho nhân viên vận hành.
 
 Hai dự án phát triển song song. Bản Studio gốc vẫn là một ứng dụng web bình thường; không sửa repo đó để biến nó thành Agent. Bản trong repo này cần giữ cùng ngôn ngữ nghiệp vụ, luồng thuê, giao diện và trạng thái với Studio, đồng thời có thêm Ops Agent. Frontend được mang về hiện là bản demo dùng fixture; backend nghiệp vụ và connector chưa được sao chép hoặc xác nhận.
 
@@ -49,7 +49,7 @@ Ma trận quyền, dữ liệu thật và người dùng được phép dùng Ag
 ## 6. Nguyên tắc thiết kế
 
 1. **Phát triển song song:** repo Studio gốc và repo Ops Agent có code, build và nhịp phát hành riêng.
-2. **Giữ parity:** dùng chung baseline nghiệp vụ, từ vựng, các trạng thái nhiều chiều, luồng lõi, design tokens và tiêu chuẩn responsive/accessibility. Xem [quy trình đồng bộ](ui-parity.md).
+2. **Giữ parity:** dùng chung baseline nghiệp vụ, từ vựng, các trạng thái nhiều chiều, luồng lõi, design tokens và tiêu chuẩn responsive/accessibility qua các lần rà soát giữa hai repo.
 3. **Ops Agent là phần bổ sung:** không thay hoặc âm thầm đổi hành vi của các luồng thuê đang có; thay đổi nghiệp vụ phải cập nhật tài liệu và được đối chiếu với Studio.
 4. **Có nguồn cho câu trả lời:** trích tài liệu hoặc ghi provider, phạm vi và thời điểm truy vấn.
 5. **Không biến giả định thành luật:** phân biệt nội dung đã xác nhận, phân tích, đề xuất, DEMO và chưa xác minh.
@@ -60,11 +60,10 @@ Ma trận quyền, dữ liệu thật và người dùng được phép dùng Ag
 
 ## 7. Phạm vi theo giai đoạn
 
-### Giai đoạn 0 — Mang baseline về và thiết lập parity
+### Giai đoạn 0 — Thiết lập nền độc lập
 
-- Đưa frontend Studio và tài liệu UI/UX hữu ích vào repo này; giữ nguyên dấu vết nguồn và trạng thái fixture.
-- Đối chiếu snapshot đã sao chép với repo Studio chính trước khi coi mã/tài liệu snapshot là phiên bản hiện hành.
-- Giữ các luồng web nền và dựng quy trình rà soát drift với dự án Studio.
+- Duy trì frontend nền và các luồng web trong repo Ops Agent độc lập với runtime của Studio.
+- Giữ nhất quán UI/domain với phiên bản Studio được đối chiếu trong quá trình phát triển.
 - Chốt hành vi MVP, persona, bề mặt giao diện Agent và nguồn dữ liệu.
 
 ### Giai đoạn 1 — Ops Agent có kiểm soát

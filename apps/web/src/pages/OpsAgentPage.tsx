@@ -48,85 +48,84 @@ const opsSections: { id: OpsSection; label: string }[] = [
 
 const sources = {
   businessRules: {
-    title: 'Business rules snapshot',
-    detail: 'Mục 6 · Luồng đơn thuê · 01/10/2026',
-    status: 'Snapshot · chưa xác minh',
-    tone: 'warning',
+    title: 'Yêu cầu sản phẩm Ops Agent',
+    detail: 'Mục 4 · FR-17 và FR-18',
+    status: 'Đặc tả prototype',
+    tone: 'info',
     excerpt:
-      'PENDING_CONFIRMATION chưa đảm bảo giữ unit; khi xác nhận, mỗi dòng được gán một unit vật lý.',
+      'Agent không tự cập nhật đơn, tiền, quyền, giá hoặc chính sách; không tự tính kết quả khi quy tắc chưa được xác nhận.',
   },
   handoff: {
-    title: 'Biên bản bàn giao dự án',
-    detail: 'Luồng nghiệp vụ · 08/10/2026',
-    status: 'Tài liệu bàn giao',
-    tone: 'info',
-    excerpt: 'Nhân viên xem đơn chờ, kiểm tra lịch, chọn bộ rồi xác nhận hoặc từ chối.',
+    title: 'Định hướng sản phẩm Ops Agent',
+    detail: 'Mục 5 · Lời hứa sản phẩm',
+    status: 'Định hướng',
+    tone: 'neutral',
+    excerpt: 'Agent hỗ trợ công việc, nêu nguồn và phân biệt rõ thông tin, đề xuất với thao tác đã được hệ thống xác nhận.',
   },
   paymentReview: {
-    title: 'Báo cáo QA responsive và khả năng truy cập',
-    detail: 'Luồng giao đồ · 03/10/2026',
-    status: 'Snapshot UI/fixture',
-    tone: 'neutral',
-    excerpt: 'Chuyển khoản chờ đối soát không được đánh dấu là tiền đã thu hoặc mở bước giao bộ.',
+    title: 'Yêu cầu sản phẩm Ops Agent',
+    detail: 'Luồng AT-04 · payment/refund pending',
+    status: 'Tiêu chí prototype',
+    tone: 'info',
+    excerpt: 'Trạng thái pending phải được gọi là đang chờ; không diễn đạt như giao dịch đã thu hoặc đã hoàn.',
   },
   paymentRules: {
-    title: 'Business rules snapshot',
-    detail: 'Mục 9 · Thanh toán và refund · 01/10/2026',
-    status: 'Snapshot · chưa xác minh',
-    tone: 'warning',
+    title: 'Yêu cầu sản phẩm Ops Agent',
+    detail: 'Mục 3 · Nhãn nguồn và trạng thái',
+    status: 'Đặc tả prototype',
+    tone: 'info',
     excerpt:
-      'Payment SUCCEEDED phải có paid_at; tiền mặt/chuyển khoản ghi thủ công yêu cầu recorded_by.',
+      'Câu trả lời phải phân biệt DOC, DEMO, nguồn đã cấu hình, đề xuất và nội dung chưa xác minh.',
   },
   handoffDecisions: {
-    title: 'Biên bản bàn giao dự án',
-    detail: 'Các quyết định nghiệp vụ còn mở · 08/10/2026',
+    title: 'Yêu cầu sản phẩm Ops Agent',
+    detail: 'Mục 9 · Quyết định còn mở',
     status: 'Cần xác minh',
     tone: 'warning',
-    excerpt: 'SLA đơn chờ, phí phát sinh và cách hoàn cọc vẫn cần được chốt.',
+    excerpt: 'Nguồn dữ liệu, quyền, policy nghiệp vụ và thao tác được phép cần được chủ sản phẩm xác nhận.',
   },
   returnFlow: {
-    title: 'Business rules snapshot',
-    detail: 'Mục 6 · Luồng đơn thuê · 01/10/2026',
-    status: 'Snapshot · chưa xác minh',
+    title: 'Yêu cầu sản phẩm Ops Agent',
+    detail: 'Mục 4 · FR-18',
+    status: 'Đặc tả prototype',
     tone: 'warning',
     excerpt:
-      'Sau khi nhận trả, unit chuyển READY, CLEANING, REPAIR hoặc RETIRED theo kết quả kiểm tra.',
+      'Khi policy về phí, hư hỏng hoặc refund chưa được xác nhận, Agent không tự tính kết quả.',
   },
 } satisfies Record<string, SourceNote>;
 
 const knowledgeSources: KnowledgeSource[] = [
   {
-    id: 'business-rules',
-    kind: 'QUY TẮC NGHIỆP VỤ',
-    title: 'Business rules snapshot',
-    detail: '01/10/2026 · các mục về đơn thuê, payment, refund và tình trạng unit',
-    status: 'Snapshot · cần xác minh',
-    tone: 'warning',
-    coverage: 'Rental · Unit · Payment · Refund',
+    id: 'product-requirements',
+    kind: 'YÊU CẦU OPS AGENT',
+    title: 'Yêu cầu sản phẩm Ops Agent',
+    detail: 'Mục 3–4 · nguồn, trạng thái và yêu cầu an toàn',
+    status: 'Đặc tả prototype',
+    tone: 'info',
+    coverage: 'Nguồn · câu trả lời · giới hạn thao tác',
     excerpt:
-      'Đây là snapshot tham khảo; chưa xác nhận là phiên bản nghiệp vụ hiện hành của Studio.',
+      'Mô tả phạm vi dự kiến của Agent; chưa phải SOP vận hành được duyệt.',
   },
   {
-    id: 'handoff',
-    kind: 'BIÊN BẢN BÀN GIAO',
-    title: 'Biên bản bàn giao dự án Costume Rental Studio',
-    detail: '08/10/2026 · luồng thuê và các quyết định nghiệp vụ còn mở',
-    status: 'Có nội dung cần chốt',
-    tone: 'warning',
-    coverage: 'Duyệt đơn · giao trả · SLA · hoàn cọc',
-    excerpt:
-      'Nhân viên kiểm tra lịch và bộ phù hợp trước khi xác nhận. SLA, phí phát sinh và hoàn cọc còn là quyết định mở.',
-  },
-  {
-    id: 'ux-review',
-    kind: 'TÀI LIỆU UI / QA',
-    title: 'Báo cáo QA responsive và khả năng truy cập',
-    detail: '03/10/2026 · chỉ xác nhận UI/fixture trong snapshot',
-    status: 'Tham khảo giao diện',
+    id: 'product-direction',
+    kind: 'ĐỊNH HƯỚNG SẢN PHẨM',
+    title: 'Định hướng sản phẩm Ops Agent',
+    detail: 'Mục 5–8 · nguyên tắc, giai đoạn và ranh giới',
+    status: 'Tài liệu định hướng',
     tone: 'neutral',
-    coverage: 'UI · fixture · trạng thái hiển thị',
+    coverage: 'Phát triển độc lập · phạm vi Agent',
     excerpt:
-      'Tài liệu QA hỗ trợ đối chiếu cách hiển thị; không phải bằng chứng về giao dịch hoặc tồn kho thật.',
+      'Ops Agent là capability bổ sung trong ứng dụng riêng; không thay thế web nghiệp vụ Studio.',
+  },
+  {
+    id: 'demo-runbooks',
+    kind: 'NỘI DUNG DEMO',
+    title: 'Checklist minh họa',
+    detail: 'Nội dung giao diện · không phải SOP đã duyệt',
+    status: 'DEMO',
+    tone: 'warning',
+    coverage: 'Đơn · thanh toán · giao nhận',
+    excerpt: 'Các bước hiển thị để minh họa giao diện. Hãy dùng SOP được tổ chức phê duyệt khi xử lý thật.',
   },
 ];
 
@@ -153,15 +152,15 @@ const runbooks = [
     id: 'confirmation',
     category: 'ĐƠN THUÊ',
     title: 'Duyệt đơn online',
-    status: 'Còn quyết định cần xác minh',
+    status: 'Checklist minh họa · cần SOP duyệt',
     tone: 'warning' as const,
-    summary: 'Kiểm tra yêu cầu, lịch và bộ vật lý trước khi nhân viên quyết định.',
+    summary: 'Ví dụ giao diện; quy trình chính thức cần lấy từ SOP được tổ chức phê duyệt.',
     question: 'Đơn online đang chờ xác nhận thì nhân viên cần làm gì?',
     sources: [sources.businessRules, sources.handoffDecisions, sources.handoff],
     steps: [
-      'Đọc trạng thái PENDING_CONFIRMATION và thông tin kỳ thuê.',
-      'Kiểm tra lịch, tình trạng và bộ vật lý phù hợp tại chi nhánh.',
-      'Người có quyền xác nhận hoặc từ chối; snapshot chưa chốt SLA duyệt.',
+      'Đối chiếu trạng thái và kỳ thuê trên hệ thống nghiệp vụ có thẩm quyền.',
+      'Kiểm tra khả dụng của bộ theo nguồn dữ liệu được cấu hình.',
+      'Để nhân viên có quyền xử lý; Ops Agent không xác nhận hoặc từ chối đơn.',
     ],
   },
   {
@@ -170,28 +169,28 @@ const runbooks = [
     title: 'Đối soát chuyển khoản',
     status: 'Đối chiếu nguồn trước khi kết luận',
     tone: 'warning' as const,
-    summary: 'Tách trạng thái giao dịch khỏi trạng thái đơn; không coi pending là đã thu.',
+    summary: 'Giữ trạng thái pending là đang chờ; demo chưa kết nối nguồn thanh toán.',
     question: 'Chuyển khoản chờ đối soát có được tính là đã thu không?',
     sources: [sources.paymentReview, sources.paymentRules],
     steps: [
-      'Mở trạng thái giao dịch ở nguồn được studio chỉ định.',
-      'Chỉ coi là thành công khi nguồn xác nhận trạng thái SUCCEEDED và dữ liệu cần thiết.',
-      'Không mở bước giao bộ chỉ dựa trên ảnh chuyển khoản hoặc nội dung chat.',
+      'Kiểm tra trạng thái giao dịch tại nguồn thanh toán được cấu hình.',
+      'Không diễn đạt giao dịch pending thành đã thu hoặc đã hoàn.',
+      'Nếu chưa có nguồn xác nhận, báo rõ không thể xác minh giao dịch cụ thể.',
     ],
   },
   {
     id: 'handover',
     category: 'GIAO ĐỒ',
     title: 'Chuẩn bị bàn giao bộ',
-    status: 'Checklist tham khảo',
+    status: 'Checklist minh họa · cần SOP duyệt',
     tone: 'info' as const,
-    summary: 'Đối chiếu đơn, mã bộ, người nhận và khoản tiền theo nguồn có thẩm quyền.',
+    summary: 'Các điểm kiểm tra gợi ý; SOP giao nhận chính thức chưa được kết nối.',
     question: 'Trước khi bàn giao một đơn thuê cần kiểm tra những gì?',
     sources: [sources.handoff, sources.paymentReview],
     steps: [
-      'Đối chiếu đơn đã được nhân viên xác nhận và người nhận thực tế.',
-      'Quét đúng barcode của từng bộ được gán cho dòng đơn.',
-      'Xác nhận trạng thái tiền ở nguồn được cấu hình; thao tác giao do nhân viên thực hiện.',
+      'Đối chiếu đơn và người nhận trên hệ thống nghiệp vụ có thẩm quyền.',
+      'Kiểm tra mã bộ theo quy trình được tổ chức phê duyệt.',
+      'Nhân viên thực hiện bước giao; demo không ghi thay đổi.',
     ],
   },
   {
@@ -200,13 +199,13 @@ const runbooks = [
     title: 'Kiểm tra tình trạng khi trả',
     status: 'Phí / hoàn cọc chưa chốt',
     tone: 'warning' as const,
-    summary: 'Ghi nhận tình trạng từng bộ; không tự suy diễn phí hoặc kết quả hoàn cọc.',
+    summary: 'Không suy diễn phí hoặc hoàn cọc khi policy và SOP chưa được xác nhận.',
     question: 'Khi khách trả đồ bị hỏng thì bước tiếp theo là gì?',
     sources: [sources.returnFlow, sources.handoffDecisions],
     steps: [
-      'Kiểm tra và ghi nhận tình trạng từng bộ, phụ kiện và mã barcode.',
-      'Phân loại unit theo kết quả kiểm tra: READY, CLEANING, REPAIR hoặc RETIRED.',
-      'Chuyển phí hoặc hoàn cọc cho người có thẩm quyền theo policy đã được chốt.',
+      'Để nhân viên ghi nhận kết quả kiểm tra trên hệ thống có thẩm quyền.',
+      'Áp dụng cách phân loại theo SOP được tổ chức phê duyệt.',
+      'Chuyển quyết định phí hoặc hoàn cọc cho người có thẩm quyền; Agent không tự tính hay ghi nhận.',
     ],
   },
 ];
@@ -227,28 +226,28 @@ function answerFor(prompt: string): Pick<AgentMessage, 'text' | 'sources' | 'dem
 
   if (normalized.includes('chờ') && normalized.includes('đơn')) {
     return {
-      text: 'Trong snapshot, đơn PENDING_CONFIRMATION chưa đảm bảo giữ bộ. Nhân viên cần kiểm tra lịch, chọn bộ vật lý phù hợp rồi xác nhận hoặc từ chối. SLA duyệt và cách giữ bộ vẫn là quyết định cần chốt, nên đây chưa phải quy tắc đã xác minh cho hệ thống hiện hành.',
+      text: 'Đặc tả Ops Agent hiện chưa định nghĩa SOP duyệt đơn hoặc SLA vận hành. Hãy kiểm tra đơn trên hệ thống có thẩm quyền và làm theo quy trình đã được tổ chức phê duyệt; bản demo không xác nhận hoặc từ chối đơn.',
       sources: [sources.businessRules, sources.handoffDecisions, sources.handoff],
     };
   }
 
   if (normalized.includes('chuyển khoản') || normalized.includes('đã thu')) {
     return {
-      text: 'Trong tài liệu UI/fixture, chuyển khoản chờ đối soát không được hiển thị như tiền đã thu và chưa mở bước giao bộ. Business rules snapshot yêu cầu payment SUCCEEDED có paid_at. Nguồn đối soát thật chưa được cấu hình, nên bản demo không thể xác nhận giao dịch cụ thể.',
+      text: 'Theo tiêu chí AT-04 trong yêu cầu sản phẩm, trạng thái payment/refund pending phải được gọi là đang chờ, không diễn đạt như đã thu hoặc đã hoàn. Nguồn thanh toán live chưa được cấu hình nên bản demo không thể xác minh giao dịch cụ thể.',
       sources: [sources.paymentReview, sources.paymentRules],
     };
   }
 
   if (normalized.includes('quá hạn') || normalized.includes('trễ hạn')) {
     return {
-      text: 'Hãy đối chiếu hạn trả và trạng thái từng bộ trong nguồn nghiệp vụ đã được cấu hình. Các tài liệu hiện có chưa chốt cách tính phí trễ; Ops Agent không tự tính phí, ghi nhận khoản phải thu hoặc thay đổi trạng thái đơn.',
+      text: 'Hãy đối chiếu hạn trả trên nguồn nghiệp vụ có thẩm quyền. Nếu policy tính phí trễ chưa được xác nhận, yêu cầu sản phẩm quy định Agent không tự tính phí, ghi nhận khoản phải thu hoặc thay đổi trạng thái đơn.',
       sources: [sources.handoffDecisions, sources.businessRules],
     };
   }
 
   if (normalized.includes('bàn giao') || normalized.includes('giao bộ')) {
     return {
-      text: 'Checklist tham khảo: đối chiếu đơn đã được xác nhận, người nhận, barcode của từng bộ và trạng thái thanh toán tại nguồn có thẩm quyền. Chuyển khoản pending không được xem là đã thu. Nhân viên thực hiện bước giao trong luồng nghiệp vụ; bản demo không ghi thay đổi.',
+      text: 'Checklist minh họa: đối chiếu đơn, người nhận, mã bộ và trạng thái giao dịch trên nguồn có thẩm quyền. Đây chưa phải SOP được duyệt; nhân viên thực hiện thao tác giao trong hệ thống nghiệp vụ, còn bản demo không ghi thay đổi.',
       sources: [sources.handoff, sources.paymentReview],
     };
   }
@@ -259,7 +258,7 @@ function answerFor(prompt: string): Pick<AgentMessage, 'text' | 'sources' | 'dem
     normalized.includes('hư')
   ) {
     return {
-      text: 'Tài liệu mô tả bước nhận trả và ghi tình trạng/thiếu/hỏng; sau kiểm tra, bộ có thể chuyển sang READY, CLEANING, REPAIR hoặc RETIRED. Mức phí và cách cấn/hoàn cọc cho từng tình huống còn cần xác nhận. Agent chỉ có thể chuẩn bị checklist, không quyết định khoản tiền hoặc ghi nhận hoàn tiền.',
+      text: 'Yêu cầu sản phẩm quy định Agent không tự tính kết quả khi policy về hư hỏng, phí hoặc refund chưa được xác nhận. Hãy ghi nhận theo SOP được duyệt và chuyển quyết định tài chính cho người có thẩm quyền; prototype không cập nhật dữ liệu.',
       sources: [sources.returnFlow, sources.handoffDecisions],
     };
   }
@@ -397,7 +396,7 @@ export function OpsAgentPage({
           <div>
             <p className="eyebrow">OPS WORKSPACE</p>
             <h2>Trợ lý đang ở chế độ hướng dẫn</h2>
-            <p>Đọc fixture và tài liệu snapshot · chưa có model, provider hay thao tác ghi.</p>
+            <p>Dùng fixture và tài liệu sản phẩm · chưa có model, provider hay thao tác ghi.</p>
           </div>
         </div>
         <div className="ops-console-meta">
@@ -848,7 +847,7 @@ function KnowledgeSection({
         <div>
           <p className="eyebrow">KNOWLEDGE BASE · BẢN DEMO</p>
           <h2>Nguồn tri thức</h2>
-          <p>Danh mục snapshot đang tham khảo. Chưa có ingestion, indexing hay đồng bộ tài liệu tự động.</p>
+          <p>Danh mục tài liệu Ops Agent và checklist DEMO. Chưa có ingestion, indexing hay đồng bộ tự động.</p>
         </div>
         <StatusLabel text="3 nguồn khai báo tĩnh" tone="neutral" />
       </div>
@@ -903,7 +902,7 @@ function KnowledgeSection({
 
       <div className="ops-inline-note" role="note">
         <Icon name="clock" size={17} />
-        Chưa có trạng thái đồng bộ hoặc thời điểm truy vấn live. Không dùng các snapshot này làm chính sách hiện hành.
+        Chưa có trạng thái đồng bộ hoặc truy vấn live. Tài liệu định hướng và checklist DEMO chưa phải SOP vận hành đã duyệt.
       </div>
     </div>
   );
