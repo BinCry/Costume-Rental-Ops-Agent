@@ -1,21 +1,140 @@
 # Costume Rental Ops Agent
 
-Ứng dụng này phát triển độc lập dựa trên nền giao diện và các luồng nghiệp vụ của [Costume Rental Studio](https://github.com/BinCry/Costume-Rental-Studio), đồng thời bổ sung Ops Agent cho công việc vận hành. Hai repo có mã nguồn, môi trường chạy và vòng đời riêng; hiện chưa dùng chung backend hoặc dữ liệu live.
+Service Python độc lập bổ sung Ops Agent và RAG cho [Costume Rental Studio](https://github.com/BinCry/Costume-Rental-Studio). Repo này chứa API AI, knowledge base, ingestion và evaluation; giao diện người dùng tiếp tục thuộc ứng dụng Studio chính.
 
 ## Tài liệu chính
 
-- [Định hướng sản phẩm](docs/product-direction.md)
 - [Yêu cầu sản phẩm Ops Agent](docs/product-requirements.md)
-- [Tổng quan frontend](apps/web/README.md)
-- [Tổng quan Ops Agent](ops-agent/README.md)
+- [Quy trình nghiệp vụ](docs/business-processes.md)
+- [Đặc tả hành vi Agent](docs/agent-behavior-spec.md)
+- [Tools và tích hợp](docs/tools-and-integrations.md)
+- [Đánh giá và an toàn](docs/evaluation-and-safety.md)
+- [Chỉ mục kho tri thức RAG](knowledge-base/00-index.md)
 
-## Chạy ứng dụng
+## Chạy API
 
-Yêu cầu Node.js tương thích với Vite và pnpm `11.1.2`.
+Yêu cầu Python 3.11 hoặc 3.12 và `uv`.
 
 ```powershell
-pnpm install
-pnpm dev
+Copy-Item .env.example .env
+uv sync
+uv run python scripts/validate_knowledge_base.py
+uv run python scripts/migrate_knowledge.py
+uv run python scripts/ingest_knowledge.py
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8001
 ```
 
-Frontend hiện dùng fixture; Ops Agent chưa kết nối model, API hoặc nguồn dữ liệu vận hành live. Các thao tác trong prototype không ghi giao dịch lên máy chủ.
+`migrate_knowledge.py` now applies both the pgvector schema and the agent-case
+schema. It is safe to re-run: each migration is checksum tracked.
+
+## Kho tri thức RAG
+
+`knowledge-base/` chỉ chứa nội dung nghiệp vụ bằng ngôn ngữ dễ hiểu để đưa vào RAG. API, ánh xạ tool và hướng dẫn phát triển nằm trong `docs/` và không được ingest vào kho trả lời khách hàng. Khi ingest, front matter phải được tách thành metadata; trường `source` chỉ dùng để truy vết và không được ghép vào nội dung trả lời.
+
+File có `retrieval_enabled: false` phải bị loại khỏi tập tìm kiếm. Tài liệu đã được đối chiếu với hành vi hiện có của Studio mang nhãn `verified_from_system`; tài liệu đang soạn mang nhãn `draft_from_code`. Hai loại này có thể giải thích quy trình hệ thống nhưng không thay thế chính sách kinh doanh. Quy định chưa có bằng chứng được gắn `needs_business_confirmation` và không được dùng làm quy định chính thức cho câu trả lời hoặc thao tác.
+
+Các quy định lõi của `POLICY-2025` và ma trận quyền hoàn tiền đã được chủ dự án xác nhận làm nguồn nghiệp vụ chính thức. Các tài liệu tương ứng mang `status: approved` và `business_authority: true`, nên RAG có thể dùng để trả lời về giới hạn thuê, hiệu lực báo giá, trả trễ, hủy đơn, thời hạn xử lý hoàn tiền, điều kiện hoàn cọc và quyền phê duyệt trong đúng phạm vi được công bố. Thời điểm phải trả và số tiền cụ thể của một đơn vẫn phải lấy từ dữ liệu live của đơn; knowledge base không thay thế việc tra cứu đó. Mức bồi thường hư hỏng hoặc thất lạc, phí gia hạn, chi phí điều chuyển và quy trình miễn giảm ngoại lệ vẫn chưa được phê duyệt, vì vậy Agent phải từ chối suy đoán hoặc chuyển người phụ trách.
+
+## Python RAG API
+
+RAG chạy trực tiếp từ thư mục gốc bằng Python/FastAPI. Service này kết nối trực tiếp với database PGVector riêng, nhưng kiểm tra quyền bằng cách gọi API của Costume Rental Studio; không đọc database nghiệp vụ của Studio.
+
+```powershell
+Copy-Item .env.example .env
+uv sync
+uv run python scripts/migrate_knowledge.py
+uv run python scripts/ingest_knowledge.py
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8001
+```
+
+`AI_DATABASE_URL` phải là một PostgreSQL URL duy nhất. Mật khẩu có ký tự đặc biệt như `@` phải URL-encode thành `%40`; không dùng tham số Prisma `schema=public`, và không lặp lại tên biến trong giá trị (ví dụ `AI_DATABASE_URL=AI_DATABASE_URL=...`).
+
+Các endpoint Python là `POST /api/v1/knowledge/search` và `POST /api/v1/knowledge/answer`. Cả hai đều là API service-to-service và bắt buộc có header `X-AI-Service-Key` khớp `AI_INTERNAL_API_KEY`:
+
+- Studio API xác thực Bearer token trước khi gọi Python service, sau đó gửi actor context qua `X-Actor-Id` và `X-Knowledge-Audiences`.
+- `search` yêu cầu actor đã đăng nhập và chỉ phục vụ luồng nội bộ.
+- `answer` cho phép actor `guest`. Guest và customer chỉ truy xuất tài liệu `customer/shared`, còn staff có quyền `knowledge.read.all` truy xuất `staff_internal/shared`.
+
+### API contract
+
+Các endpoint knowledge dùng cùng response envelope với Studio API và serialize tên trường JSON theo `camelCase`:
+
+```json
+{
+  "success": true,
+  "data": { "result": {} },
+  "message": "Knowledge answer completed"
+}
+```
+
+Mọi lỗi đã xử lý, bao gồm body không hợp lệ, route không tồn tại và HTTP method không được hỗ trợ, đều trả envelope chung:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Invalid knowledge answer request"
+  },
+  "statusCode": 400,
+  "timestamp": "2026-10-13T12:00:00+00:00",
+  "path": "/api/v1/knowledge/answer",
+  "requestId": "..."
+}
+```
+
+Service giữ `X-Request-Id` do caller gửi hoặc tự tạo nếu thiếu, rồi trả lại cùng giá trị trong response header và error body để trace xuyên hai service. Body JSON sai cú pháp dùng code `INVALID_JSON`; body không đúng schema dùng `VALIDATION_ERROR`, đều với HTTP 400. Schema request, success response, error response và yêu cầu xác thực có tại `/docs` hoặc `/openapi.json`; OpenAPI không quảng bá response 422 mặc định vì validation đã được chuẩn hóa thành 400.
+
+Frontend và client bên ngoài không gọi trực tiếp Python service và không được nhận `AI_INTERNAL_API_KEY`. Chúng chỉ gọi `POST /api/v1/knowledge/answer` trên Studio API. Studio API áp dụng rate limit, xác thực Bearer token nếu có, tự tạo actor context đáng tin cậy, rồi chuyển tiếp request cùng service key. Python service không nhận JWT và không gọi ngược `/auth/me`. `/api/v1/knowledge/search` không được proxy ra Studio API.
+
+### Cấu hình hai service
+
+Hai service phải ở cùng private network và dùng cùng một secret ngẫu nhiên dài ít nhất 32 ký tự. URL phải là origin nội bộ, không chứa credential, path, query hoặc fragment.
+
+| Service | Biến | Giá trị |
+| --- | --- | --- |
+| Studio API | `AI_SERVICE_URL` | Origin nội bộ của Python service, ví dụ `http://costume-rental-ops-agent:8001` |
+| Studio API | `AI_SERVICE_TIMEOUT_MS` | Timeout proxy; mặc định `30000` ms |
+| Studio API | `AI_INTERNAL_API_KEY` | Cùng secret với Python service |
+| Studio API | `TRUST_PROXY_HOPS` | Số reverse-proxy hop chính xác; để trống khi chạy local, Coolify thường là `1` |
+| Python service | `AI_INTERNAL_API_KEY` | Cùng secret với Studio API |
+
+Trong Coolify, dùng hostname/nội bộ URL thật được cấp cho từng resource; không dùng `localhost` để kết nối giữa hai container. Chỉ Studio API cần public access. Sau khi deploy, kiểm tra `GET /health/ready` của Python service trước khi gửi câu hỏi qua Studio API.
+
+Endpoint `answer` dùng Groq làm primary và Gemini làm fallback; cấu hình bằng `GROQ_API_KEY` và `GEMINI_API_KEY`. Fallback chỉ xảy ra khi timeout, HTTP 429 hoặc HTTP 5xx, không xảy ra khi knowledge base thiếu dữ liệu. Cả hai endpoint đều trả citation và từ chối trả lời khi không có ngữ cảnh đủ tin cậy.
+
+## Docker và CI/CD
+
+Build production image từ chính thư mục Ops Agent để `.dockerignore` cục bộ
+được áp dụng:
+
+```powershell
+docker build -t costume-rental-ops-agent:local .
+docker run --rm -p 8001:8001 --env-file .env costume-rental-ops-agent:local
+```
+
+Image dùng Python 3.12, dependency production được khóa bởi `uv.lock`, chạy bằng
+user không có quyền root và kiểm tra sức khỏe qua `/health`. Secret runtime
+không được copy vào image.
+
+Hai GitHub Actions workflow ở thư mục `.github/workflows`:
+
+- `ci.yml`: chạy Ruff, mypy, kiểm tra knowledge base, pytest và build
+  Python package khi pull request hoặc branch khác `main` thay đổi AI service.
+- `publish.yml`: chạy lại toàn bộ kiểm tra trên `main`, publish image
+  `kietphan24/costume-rental-ops-agent:staging` cùng một tag chứa short SHA, sau
+  đó gọi webhook deploy resource Ops Agent trên Coolify.
+
+Trước khi bật publish, tạo các GitHub repository secret:
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+- `OPS_AGENT_COOLIFY_DEPLOY_WEBHOOK`
+- `COOLIFY_API_TOKEN` (không bắt buộc nếu URL webhook đã tự xác thực)
+
+Trong Coolify, cấu hình resource pull image
+`kietphan24/costume-rental-ops-agent:staging`, expose port `8001` và inject các
+biến trong `.env.example`. Đặt pre-deploy command là
+`python scripts/migrate_knowledge.py`. Chỉ chủ động chạy
+`python scripts/ingest_knowledge.py` khi tài liệu được duyệt có thay đổi. Không
+đưa database URL hoặc provider API key production vào workflow GitHub.
