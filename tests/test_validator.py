@@ -33,6 +33,7 @@ def fixture(
     document: str = VALID_DOCUMENT,
     disabled_document: str | None = None,
     query_transform: Callable[[list[dict[str, object]]], list[object]] | None = None,
+    validate_workspace_source_existence: bool = True,
 ) -> ValidationResult:
     project_root = tmp_path / "project"
     kb_root = project_root / "knowledge-base"
@@ -64,6 +65,7 @@ def fixture(
         query_file=query_file,
         project_root=project_root,
         workspace_root=tmp_path,
+        validate_workspace_source_existence=validate_workspace_source_existence,
     )
 
 
@@ -170,6 +172,23 @@ def test_validator_rejects_escaping_source(tmp_path: Path) -> None:
     failures = "\n".join(fixture(tmp_path, document=document).failures)
 
     assert "source escapes its declared root" in failures
+
+
+def test_validator_can_skip_missing_workspace_sources_in_standalone_checkout(
+    tmp_path: Path,
+) -> None:
+    document = VALID_DOCUMENT.replace(
+        "project://source.md",
+        "workspace://apps/api/prisma/schema.prisma",
+    )
+
+    result = fixture(
+        tmp_path,
+        document=document,
+        validate_workspace_source_existence=False,
+    )
+
+    assert result.failures == []
 
 
 def test_validator_handles_invalid_source_and_query_values(tmp_path: Path) -> None:

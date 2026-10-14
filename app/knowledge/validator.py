@@ -130,6 +130,8 @@ def _validate_source(
     roots: dict[str, Path],
     label: str,
     failures: list[str],
+    *,
+    validate_workspace_source_existence: bool,
 ) -> None:
     if not isinstance(source, str):
         failures.append(f"{label}: every source entry must be a string")
@@ -143,7 +145,7 @@ def _validate_source(
     target = (base / relative_path).resolve()
     if target == base or not target.is_relative_to(base):
         failures.append(f"{label}: source escapes its declared root: {source}")
-    elif not target.exists():
+    elif not target.exists() and (kind != "workspace" or validate_workspace_source_existence):
         failures.append(f"{label}: source does not exist: {source}")
 
 
@@ -153,6 +155,7 @@ def validate_knowledge_base(
     query_file: Path,
     project_root: Path,
     workspace_root: Path,
+    validate_workspace_source_existence: bool = True,
 ) -> ValidationResult:
     kb_root = kb_root.resolve()
     roots = {
@@ -208,7 +211,13 @@ def validate_knowledge_base(
             failures.append(f"{label}: source must be a non-empty list")
         else:
             for source in sources:
-                _validate_source(source, roots, label, failures)
+                _validate_source(
+                    source,
+                    roots,
+                    label,
+                    failures,
+                    validate_workspace_source_existence=validate_workspace_source_existence,
+                )
 
         if metadata.get("status") == "approved":
             if (
