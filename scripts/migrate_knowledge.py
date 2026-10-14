@@ -1,0 +1,48 @@
+import hashlib
+from pathlib import Path
+
+import psycopg
+
+from app.config import get_settings
+
+MIGRATIONS = (
+    ("001_init_pgvector_python", "001_init_pgvector.sql"),
+    ("002_agent_cases_python", "002_agent_cases.sql"),
+)
+
+
+def main() -> None:
+    settings = get_settings()
+    with psycopg.connect(settings.AI_DATABASE_URL) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS knowledge_schema_migrations (
+              migration_id VARCHAR(100) PRIMARY KEY,
+              checksum VARCHAR(64) NOT NULL,
+              applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+        sql_directory = Path(__file__).resolve().parents[1] / "sql"
+        for migration_id, filename in MIGRATIONS:
+            sql = (sql_directory / filename).read_text(encoding="utf-8")
+            checksum = hashlib.sha256(sql.encode("utf-8")).hexdigest()
+            existing = connection.execute(
+                "SELECT checksum FROM knowledge_schema_migrations WHERE migration_id = %s",
+                (migration_id,),
+            ).fetchone()
+            if existing is not None:
+                if existing[0] != checksum:
+                    raise RuntimeError(f"Migration checksum mismatch: {migration_id}")
+                print(f"Knowledge migration already applied: {migration_id}")
+                continue
+            connection.execute(sql)
+            connection.execute(
+                "INSERT INTO knowledge_schema_migrations (migration_id, checksum) VALUES (%s, %s)",
+                (migration_id, checksum),
+            )
+            print(f"Knowledge migration applied: {migration_id}")
+
+
+if __name__ == "__main__":
+    main()
