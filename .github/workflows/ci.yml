@@ -1,0 +1,60 @@
+name: Ops Agent CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ops-agent-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Lint, Typecheck, Test, Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AI_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ci?sslmode=disable
+      AI_INTERNAL_API_KEY: ci-only-internal-key-at-least-32-characters
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          version: '0.11.13'
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked dependencies
+        run: uv sync --frozen
+
+      - name: Run verification suite
+        run: |
+          uv run ruff check .
+          uv run mypy app scripts tests
+          uv run python scripts/validate_knowledge_base.py
+          uv run pytest -q
+          uv build
+
+      - name: Upload reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ops-agent-verification-reports
+          path: |
+            .pytest_cache
+            dist
+          if-no-files-found: ignore
