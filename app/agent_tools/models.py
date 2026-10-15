@@ -130,6 +130,21 @@ class GoalEntities(ApiModel):
     order_item_id: UUID | None = None
     payment_id: UUID | None = None
     block_id: UUID | None = None
+    block_action: Literal["create", "update", "cancel"] | None = None
+    block_type: (
+        Literal[
+            "CLEANING",
+            "REPAIR",
+            "ALTERATION",
+            "INSPECTION",
+            "INTERNAL_USE",
+            "MANUAL",
+            "OTHER",
+        ]
+        | None
+    ) = None
+    blocked_from: datetime | None = None
+    blocked_until: datetime | None = None
     from_branch_id: UUID | None = None
     to_branch_id: UUID | None = None
     unit_ids: tuple[UUID, ...] = ()
@@ -173,7 +188,7 @@ class AgentToolExecutionRequest(ApiModel):
     tool_call_id: UUID
     tool_name: str = Field(pattern=r"^[a-z][a-z0-9_]{1,79}$")
     arguments: dict[str, Any] = Field(default_factory=dict)
-    expected_version: int | None = Field(default=None, ge=0)
+    expected_version: int | None = Field(default=None, ge=1)
     idempotency_key: str = Field(min_length=1, max_length=255)
     approval_id: UUID | None = None
 

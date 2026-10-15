@@ -12,6 +12,161 @@ from app.agent_tools.models import AgentToolExecutionResult, ToolExecutionStatus
 from app.models import ActorContext
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "readback_tool", "readback_data"),
+    [
+        (
+            "create_unit_block",
+            {
+                "unitId": "10000000-0000-4000-8000-000000000001",
+                "blockType": "CLEANING",
+                "blockedFrom": "2026-10-16T08:00:00.000Z",
+                "blockedUntil": "2026-10-16T10:00:00.000Z",
+                "reason": "Scheduled cleaning",
+            },
+            "get_unit_block",
+            {
+                "id": "10000000-0000-4000-8000-000000000011",
+                "unitId": "10000000-0000-4000-8000-000000000001",
+                "blockType": "CLEANING",
+                "blockedFrom": "2026-10-16T08:00:00Z",
+                "blockedUntil": "2026-10-16T10:00:00Z",
+                "reason": "Scheduled cleaning",
+                "status": "PLANNED",
+            },
+        ),
+        (
+            "update_unit_block",
+            {
+                "blockId": "10000000-0000-4000-8000-000000000011",
+                "reason": "Updated reason",
+                "expectedUpdatedAt": "2026-10-15T08:00:00Z",
+            },
+            "get_unit_block",
+            {"id": "10000000-0000-4000-8000-000000000011", "reason": "Updated reason"},
+        ),
+        (
+            "cancel_unit_block",
+            {"blockId": "10000000-0000-4000-8000-000000000011", "reason": "Cancel"},
+            "get_unit_block",
+            {"id": "10000000-0000-4000-8000-000000000011", "status": "CANCELLED"},
+        ),
+        (
+            "extend_rental_order",
+            {
+                "orderId": "10000000-0000-4000-8000-000000000002",
+                "newDueAt": "2026-10-20T08:00:00Z",
+                "reason": "Requested",
+            },
+            "get_rental_order",
+            {
+                "id": "10000000-0000-4000-8000-000000000002",
+                "plannedDueAt": "2026-10-20T08:00:00.000Z",
+            },
+        ),
+        (
+            "reallocate_rental_item",
+            {
+                "orderId": "10000000-0000-4000-8000-000000000002",
+                "orderItemId": "10000000-0000-4000-8000-000000000003",
+                "unitId": "10000000-0000-4000-8000-000000000004",
+                "reason": "Replacement",
+            },
+            "get_rental_order",
+            {
+                "id": "10000000-0000-4000-8000-000000000002",
+                "items": [
+                    {
+                        "id": "10000000-0000-4000-8000-000000000003",
+                        "unitId": "10000000-0000-4000-8000-000000000004",
+                    }
+                ],
+            },
+        ),
+        (
+            "cancel_rental_order",
+            {"orderId": "10000000-0000-4000-8000-000000000002", "reason": "Cancel"},
+            "get_rental_order",
+            {"id": "10000000-0000-4000-8000-000000000002", "status": "CANCELLED"},
+        ),
+        (
+            "create_stock_transfer",
+            {
+                "fromBranchId": "10000000-0000-4000-8000-000000000005",
+                "toBranchId": "10000000-0000-4000-8000-000000000006",
+                "unitIds": ["10000000-0000-4000-8000-000000000004"],
+            },
+            "get_stock_transfer",
+            {
+                "id": "10000000-0000-4000-8000-000000000012",
+                "status": "REQUESTED",
+                "fromBranchId": "10000000-0000-4000-8000-000000000005",
+                "toBranchId": "10000000-0000-4000-8000-000000000006",
+                "items": [{"unitId": "10000000-0000-4000-8000-000000000004"}],
+            },
+        ),
+        (
+            "approve_stock_transfer",
+            {"transferId": "10000000-0000-4000-8000-000000000012"},
+            "get_stock_transfer",
+            {"id": "10000000-0000-4000-8000-000000000012", "status": "APPROVED"},
+        ),
+        (
+            "reject_stock_transfer",
+            {"transferId": "10000000-0000-4000-8000-000000000012", "reason": "Reject"},
+            "get_stock_transfer",
+            {"id": "10000000-0000-4000-8000-000000000012", "status": "REJECTED"},
+        ),
+        (
+            "create_payment_checkout",
+            {
+                "orderId": "10000000-0000-4000-8000-000000000002",
+                "purpose": "RENTAL",
+                "amountVnd": 100000,
+            },
+            "get_payment_by_idempotency_key",
+            {
+                "orderId": "10000000-0000-4000-8000-000000000002",
+                "purpose": "RENTAL",
+                "amountVnd": 100000,
+            },
+        ),
+        (
+            "request_refund",
+            {
+                "paymentId": "10000000-0000-4000-8000-000000000009",
+                "amountVnd": 50000,
+                "reason": "Overpayment",
+            },
+            "get_refund_by_idempotency_key",
+            {
+                "paymentId": "10000000-0000-4000-8000-000000000009",
+                "amountVnd": 50000,
+                "status": "REQUESTED",
+            },
+        ),
+    ],
+)
+def test_every_write_has_a_matching_readback_postcondition(
+    tool_name: str,
+    arguments: dict[str, object],
+    readback_tool: str,
+    readback_data: dict[str, object],
+) -> None:
+    snapshot = {"toolName": tool_name, "arguments": arguments}
+    write_result = AgentToolExecutionResult(
+        status=ToolExecutionStatus.OK,
+        data={"id": readback_data.get("id")},
+        observed_at=datetime.now(UTC),
+    )
+
+    readback = execution._readback_arguments(snapshot, write_result, "agent:test")
+
+    assert readback is not None
+    assert readback[0] == readback_tool
+    assert execution._postcondition(snapshot, readback_data)
+
+
 def frozen(
     tool_name: str, arguments: dict[str, object], expected_version: int | None = None
 ) -> tuple[dict[str, Any], str]:

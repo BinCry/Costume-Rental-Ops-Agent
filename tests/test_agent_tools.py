@@ -14,9 +14,11 @@ from app.agent_tools.client import AgentToolClient, ToolInvocationError
 from app.agent_tools.goal import infer_goal, missing_input_question, resolve_goal
 from app.agent_tools.graph import _turn_step_limit
 from app.agent_tools.guard import (
+    ALL_TOOL_POLICIES,
     AgentRuleViolation,
     CompletionVerification,
     ExecutionGuard,
+    ToolAuthorization,
     render_grounded_answer,
     validate_write_matches_goal,
     verify_completion,
@@ -70,9 +72,7 @@ def test_tool_call_model_rejects_arbitrary_route_shape() -> None:
 def test_write_proposal_must_match_validated_goal_inputs() -> None:
     trusted_order_id = str(uuid4())
     changed_order_id = str(uuid4())
-    goal = infer_goal(
-        f"Gia hạn đơn {trusted_order_id} đến 2026-10-20T10:00:00Z"
-    )
+    goal = infer_goal(f"Gia hạn đơn {trusted_order_id} đến 2026-10-20T10:00:00Z")
 
     with pytest.raises(ValueError, match="orderId differs"):
         validate_write_matches_goal(
@@ -221,6 +221,46 @@ def test_guard_rejects_semantically_invalid_availability_window() -> None:
     assert error.value.reason is AgentTerminationReason.INVALID_TOOL_ARGUMENTS
 
 
+def test_unit_block_create_uses_studio_api_contract_fields() -> None:
+    unit_id = str(uuid4())
+    goal = infer_goal(
+        f"Tạo block vệ sinh {unit_id} từ 2026-10-16T08:00:00Z đến 2026-10-16T10:00:00Z"
+    )
+
+    assert goal.goal_type is AgentGoalType.UNIT_BLOCK_CHANGE
+    assert goal.extracted_inputs["blockAction"] == "create"
+    assert goal.extracted_inputs["blockType"] == "CLEANING"
+    assert goal.extracted_inputs["blockedFrom"] == "2026-10-16T08:00:00Z"
+    assert goal.extracted_inputs["blockedUntil"] == "2026-10-16T10:00:00Z"
+    assert "create_unit_block" in goal.required_tools
+    assert "reason" in goal.missing_inputs
+    assert "plannedStartAt" not in goal.extracted_inputs
+    assert "plannedDueAt" not in goal.extracted_inputs
+
+
+def test_guard_rejects_inverted_unit_block_window() -> None:
+    guard = ExecutionGuard(
+        max_tool_calls=2,
+        remaining_case_steps=2,
+        tool_policies=ALL_TOOL_POLICIES,
+    )
+
+    with pytest.raises(AgentRuleViolation) as error:
+        guard.before_tool(
+            "create_unit_block",
+            {
+                "unitId": str(uuid4()),
+                "blockType": "REPAIR",
+                "blockedFrom": "2026-10-16T10:00:00Z",
+                "blockedUntil": "2026-10-16T08:00:00Z",
+                "reason": "Repair",
+            },
+            authorization=ToolAuthorization(confirmation_id=str(uuid4())),
+        )
+
+    assert error.value.reason is AgentTerminationReason.INVALID_TOOL_ARGUMENTS
+
+
 def test_completion_requires_goal_required_tool_and_matching_record() -> None:
     order_id = "00000000-0000-4000-8000-000000000001"
     goal = infer_goal(f"Kiểm tra đơn hàng {order_id}")
@@ -357,9 +397,9 @@ async def test_ambiguous_follow_up_cannot_clear_write_intent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     order_id = uuid4()
-    previous = infer_goal(
-        f"Gia hạn đơn {order_id} đến 2026-10-20T10:00:00Z"
-    ).model_copy(update={"missing_inputs": ("writeIntent",)})
+    previous = infer_goal(f"Gia hạn đơn {order_id} đến 2026-10-20T10:00:00Z").model_copy(
+        update={"missing_inputs": ("writeIntent",)}
+    )
 
     async def fake_classify(*_: object) -> tuple[GoalDraft, int]:
         return (
@@ -429,9 +469,9 @@ async def test_model_cannot_replace_validated_continuation_target(
 ) -> None:
     original_order_id = uuid4()
     unrelated_id = uuid4()
-    previous = infer_goal(
-        f"Gia hạn đơn {original_order_id} đến 2026-10-20T10:00:00Z"
-    ).model_copy(update={"missing_inputs": ("writeIntent",)})
+    previous = infer_goal(f"Gia hạn đơn {original_order_id} đến 2026-10-20T10:00:00Z").model_copy(
+        update={"missing_inputs": ("writeIntent",)}
+    )
 
     async def fake_classify(*_: object) -> tuple[GoalDraft, int]:
         return (
@@ -578,6 +618,11 @@ def test_skill_registry_rejects_duplicate_goal_owner() -> None:
 
     with pytest.raises(ValueError, match="owned by both"):
         validate_skill_registry((first, second))
+
+
+def test_skill_registry_rejects_missing_goal_owner() -> None:
+    with pytest.raises(ValueError, match="does not cover goals"):
+        validate_skill_registry((SKILLS[0],))
 
 
 def test_attach_skill_rejects_required_tool_outside_boundary() -> None:

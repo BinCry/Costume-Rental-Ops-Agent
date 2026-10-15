@@ -119,6 +119,11 @@ _REQUIRED_INPUTS: dict[AgentGoalType, tuple[str, ...]] = {
     AgentGoalType.RENTAL_ORDER_LOOKUP: ("orderId",),
 }
 
+_UNIT_BLOCK_CREATE_INPUTS = ("unitId", "blockType", "blockedFrom", "blockedUntil", "reason")
+_UNIT_BLOCK_UPDATE_FIELDS = frozenset(
+    {"blockType", "blockedFrom", "blockedUntil", "assignedTo", "costVnd", "reason", "notes"}
+)
+
 _WRITE_GOALS = frozenset(
     {
         AgentGoalType.REFUND_REQUEST,
@@ -142,7 +147,6 @@ _UUID_INPUT_FIELDS: dict[AgentGoalType, tuple[str, ...]] = {
     AgentGoalType.RENTAL_CANCELLATION: ("orderId",),
     AgentGoalType.PAYMENT_CHECKOUT: ("orderId",),
     AgentGoalType.REFUND_REQUEST: ("paymentId",),
-    AgentGoalType.UNIT_BLOCK_CHANGE: ("unitId",),
     AgentGoalType.AVAILABILITY_CHECK: ("variantId", "pickupBranchId"),
     AgentGoalType.RENTAL_REALLOCATION: ("orderId", "orderItemId", "unitId"),
     AgentGoalType.STOCK_TRANSFER_CREATE: ("fromBranchId", "toBranchId"),
@@ -151,6 +155,7 @@ _UUID_INPUT_FIELDS: dict[AgentGoalType, tuple[str, ...]] = {
 _TIMESTAMP_INPUT_FIELDS: dict[AgentGoalType, tuple[str, ...]] = {
     AgentGoalType.AVAILABILITY_CHECK: ("plannedStartAt", "plannedDueAt"),
     AgentGoalType.RENTAL_EXTENSION: ("newDueAt",),
+    AgentGoalType.UNIT_BLOCK_CHANGE: ("blockedFrom", "blockedUntil"),
 }
 
 
@@ -193,9 +198,7 @@ def _match_rule(message: str) -> AgentGoalType | None:
         return AgentGoalType.STOCK_TRANSFER_DECISION
     if _contains(text, "tao dieu chuyen", "tao chuyen kho", "create transfer"):
         return AgentGoalType.STOCK_TRANSFER_CREATE
-    if _contains(
-        text, "thanh toan", "tien coc", "quyet toan", "hoan tien", "payment", "refund"
-    ):
+    if _contains(text, "thanh toan", "tien coc", "quyet toan", "hoan tien", "payment", "refund"):
         return AgentGoalType.PAYMENT_SUMMARY
     if _contains(text, "kha dung", "con trong", "availability", "co san", "trong lich"):
         return AgentGoalType.AVAILABILITY_CHECK
@@ -205,9 +208,7 @@ def _match_rule(message: str) -> AgentGoalType | None:
         return AgentGoalType.UNIT_SCHEDULE
     if _contains(text, "don thue", "don hang", "rental order", "order"):
         return (
-            AgentGoalType.RENTAL_ORDER_LOOKUP
-            if identifiers
-            else AgentGoalType.RENTAL_ORDER_SEARCH
+            AgentGoalType.RENTAL_ORDER_LOOKUP if identifiers else AgentGoalType.RENTAL_ORDER_SEARCH
         )
     if _contains(
         text,
@@ -239,7 +240,6 @@ def _rule_inputs(
         AgentGoalType.RENTAL_CANCELLATION: "orderId",
         AgentGoalType.PAYMENT_CHECKOUT: "orderId",
         AgentGoalType.REFUND_REQUEST: "paymentId",
-        AgentGoalType.UNIT_BLOCK_CHANGE: "unitId",
     }
     first_field = first_id_goals.get(goal_type)
     if first_field is not None and identifiers:
@@ -270,6 +270,44 @@ def _rule_inputs(
     return values
 
 
+def _unit_block_rule_inputs(
+    message: str,
+    identifiers: tuple[str, ...],
+    timestamps: tuple[str, ...],
+) -> dict[str, Any]:
+    """Extract the operation-specific unit-block contract without guessing values."""
+    text = _plain(message)
+    if _contains(text, "huy block", "cancel block"):
+        action = "cancel"
+    elif _contains(text, "cap nhat block", "update block"):
+        action = "update"
+    else:
+        action = "create"
+
+    values: dict[str, Any] = {"blockAction": action}
+    if identifiers:
+        values["unitId" if action == "create" else "blockId"] = identifiers[0]
+    if action != "cancel":
+        if timestamps:
+            values["blockedFrom"] = timestamps[0]
+        if len(timestamps) >= 2:
+            values["blockedUntil"] = timestamps[1]
+    block_types = (
+        (("ve sinh", "cleaning"), "CLEANING"),
+        (("sua chua", "repair"), "REPAIR"),
+        (("chinh sua", "alteration"), "ALTERATION"),
+        (("kiem tra", "inspection"), "INSPECTION"),
+        (("noi bo", "internal use"), "INTERNAL_USE"),
+        (("thu cong", "manual"), "MANUAL"),
+        (("khac", "other"), "OTHER"),
+    )
+    for aliases, block_type in block_types:
+        if _contains(text, *aliases):
+            values["blockType"] = block_type
+            break
+    return values
+
+
 def _continuation_rule_inputs(
     goal_type: AgentGoalType,
     identifiers: tuple[str, ...],
@@ -279,6 +317,16 @@ def _continuation_rule_inputs(
     """Fill only missing positional fields when a follow-up has unlabeled values."""
     values: dict[str, Any] = {}
     remaining_ids = list(identifiers)
+    if goal_type is AgentGoalType.UNIT_BLOCK_CHANGE:
+        action = current_values.get("blockAction", "create")
+        target = "unitId" if action == "create" else "blockId"
+        if current_values.get(target) in (None, "") and remaining_ids:
+            values[target] = remaining_ids.pop(0)
+        remaining_timestamps = list(timestamps)
+        for field_name in ("blockedFrom", "blockedUntil"):
+            if current_values.get(field_name) in (None, "") and remaining_timestamps:
+                values[field_name] = remaining_timestamps.pop(0)
+        return values
     for field_name in _UUID_INPUT_FIELDS.get(goal_type, ()):
         if current_values.get(field_name) in (None, "") and remaining_ids:
             values[field_name] = remaining_ids.pop(0)
@@ -305,6 +353,19 @@ def _identifiers_from_inputs(values: dict[str, Any]) -> tuple[str, ...]:
 def _missing_inputs(goal_type: AgentGoalType, values: dict[str, Any]) -> tuple[str, ...]:
     if goal_type is AgentGoalType.STOCK_TRANSFER_DECISION:
         return ("approvalEndpoint",)
+    if goal_type is AgentGoalType.UNIT_BLOCK_CHANGE:
+        action = values.get("blockAction", "create")
+        required: tuple[str, ...]
+        if action == "cancel":
+            required = ("blockId", "reason")
+        elif action == "update":
+            required = ("blockId",)
+        else:
+            required = _UNIT_BLOCK_CREATE_INPUTS
+        missing = [field for field in required if values.get(field) in (None, "", [], ())]
+        if action == "update" and not _UNIT_BLOCK_UPDATE_FIELDS.intersection(values):
+            missing.append("blockChange")
+        return tuple(missing)
     return tuple(
         field_name
         for field_name in _REQUIRED_INPUTS.get(goal_type, ())
@@ -321,13 +382,24 @@ def _build_goal(
     confidence: float = 1.0,
     extra_missing: tuple[str, ...] = (),
 ) -> AgentGoalSpec:
-    identifiers = tuple(
-        dict.fromkeys(match.lower() for match in _UUID_PATTERN.findall(message))
-    )
+    identifiers = tuple(dict.fromkeys(match.lower() for match in _UUID_PATTERN.findall(message)))
     timestamps = tuple(_ISO_TIMESTAMP_PATTERN.findall(message))
     values = _rule_inputs(goal_type, identifiers, timestamps)
+    if goal_type is AgentGoalType.UNIT_BLOCK_CHANGE:
+        values.update(_unit_block_rule_inputs(message, identifiers, timestamps))
     values.update(extracted_inputs or {})
     required_tools, success_criteria = _GOAL_CONTRACTS[goal_type]
+    if goal_type is AgentGoalType.UNIT_BLOCK_CHANGE:
+        action_tool = {
+            "create": "create_unit_block",
+            "update": "update_unit_block",
+            "cancel": "cancel_unit_block",
+        }[str(values.get("blockAction", "create"))]
+        required_tools = (
+            ("get_unit_schedule", action_tool, "get_unit_block")
+            if action_tool == "create_unit_block"
+            else ("get_unit_block", action_tool)
+        )
     missing = tuple(dict.fromkeys((*_missing_inputs(goal_type, values), *extra_missing)))
     return attach_skill(
         AgentGoalSpec(
@@ -427,8 +499,7 @@ async def _classify_goal(
                 "facts. Use GENERAL_ASSISTANCE when no supported intent fits. Mark "
                 "explicit_write_intent true only when the user clearly asks to change data. "
                 "For a follow-up, preserve the previous goal unless the user explicitly changes "
-                "the task. Allowed goal types: "
-                + ", ".join(item.value for item in AgentGoalType)
+                "the task. Allowed goal types: " + ", ".join(item.value for item in AgentGoalType)
             )
         ),
         HumanMessage(content=f"Previous structured goal: {previous}\nCurrent request: {message}"),
@@ -524,7 +595,7 @@ def _trusted_draft_inputs(
         if field_name == "amountVnd" and str(value) in numeric_values:
             trusted[field_name] = value
             continue
-        if field_name in {"reason", "purpose", "search"}:
+        if field_name in {"reason", "purpose", "search", "blockType"}:
             if _plain(str(value)) in message_plain:
                 trusted[field_name] = value
             continue
@@ -576,9 +647,7 @@ def _merge_continuation(
     message: str,
     draft: GoalDraft | None,
 ) -> AgentGoalSpec:
-    identifiers = tuple(
-        dict.fromkeys(match.lower() for match in _UUID_PATTERN.findall(message))
-    )
+    identifiers = tuple(dict.fromkeys(match.lower() for match in _UUID_PATTERN.findall(message)))
     timestamps = tuple(_ISO_TIMESTAMP_PATTERN.findall(message))
     values = dict(previous_goal.extracted_inputs)
     values.update(
@@ -594,9 +663,7 @@ def _merge_continuation(
         AgentGoalType.GENERAL_ASSISTANCE,
     }:
         values.update(_trusted_draft_inputs(draft, message, previous_goal))
-    safety_missing = tuple(
-        item for item in previous_goal.missing_inputs if item in _SAFETY_INPUTS
-    )
+    safety_missing = tuple(item for item in previous_goal.missing_inputs if item in _SAFETY_INPUTS)
     if "writeIntent" in safety_missing and _confirms_write_intent(message):
         safety_missing = tuple(item for item in safety_missing if item != "writeIntent")
     summary = f"{previous_goal.summary}\nThông tin bổ sung: {message}"[-2_000:]
@@ -627,9 +694,7 @@ async def resolve_goal(
         )
         if rule_values:
             return GoalResolution(_merge_continuation(previous_goal, message, None))
-        draft, tokens = (
-            await _classify_goal(message, previous_goal) if allow_model else (None, 0)
-        )
+        draft, tokens = await _classify_goal(message, previous_goal) if allow_model else (None, 0)
         if (
             draft is not None
             and draft.confidence >= _MODEL_CONFIDENCE_THRESHOLD
@@ -743,6 +808,11 @@ def missing_input_question(goal: AgentGoalSpec) -> str | None:
         "pickupBranchId": "ID chi nhánh nhận",
         "plannedStartAt": "thời gian bắt đầu theo ISO-8601",
         "plannedDueAt": "thời gian trả theo ISO-8601",
+        "blockId": "ID lịch khóa bộ trang phục",
+        "blockType": "loại lịch khóa",
+        "blockedFrom": "thời gian khóa bắt đầu theo ISO-8601",
+        "blockedUntil": "thời gian khóa kết thúc theo ISO-8601",
+        "blockChange": "ít nhất một nội dung cần cập nhật cho lịch khóa",
         "newDueAt": "thời gian trả mới theo ISO-8601",
         "orderItemId": "ID dòng hàng trong đơn",
         "paymentId": "ID thanh toán",

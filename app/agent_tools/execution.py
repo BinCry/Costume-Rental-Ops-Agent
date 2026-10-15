@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from hashlib import sha256
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -137,6 +138,13 @@ def _readback_arguments(
 
 
 def _same(left: Any, right: Any) -> bool:
+    if isinstance(left, str) and isinstance(right, str):
+        try:
+            return datetime.fromisoformat(left.replace("Z", "+00:00")) == datetime.fromisoformat(
+                right.replace("Z", "+00:00")
+            )
+        except ValueError:
+            pass
     return str(left) == str(right)
 
 
@@ -145,7 +153,12 @@ def _postcondition(snapshot: dict[str, Any], data: dict[str, Any]) -> bool:
     arguments = snapshot["arguments"]
     if tool_name == "create_unit_block":
         return (
-            _same(data.get("unitId"), arguments.get("unitId")) and data.get("status") == "PLANNED"
+            _same(data.get("unitId"), arguments.get("unitId"))
+            and data.get("status") == "PLANNED"
+            and _same(data.get("blockType"), arguments.get("blockType"))
+            and _same(data.get("blockedFrom"), arguments.get("blockedFrom"))
+            and _same(data.get("blockedUntil"), arguments.get("blockedUntil"))
+            and _same(data.get("reason"), arguments.get("reason"))
         )
     if tool_name == "update_unit_block":
         return _same(data.get("id"), arguments.get("blockId")) and all(
@@ -169,22 +182,37 @@ def _postcondition(snapshot: dict[str, Any], data: dict[str, Any]) -> bool:
     if tool_name == "cancel_rental_order":
         return _same(data.get("id"), arguments.get("orderId")) and data.get("status") == "CANCELLED"
     if tool_name == "create_stock_transfer":
+        items = data.get("items")
+        observed_units = (
+            {str(item.get("unitId")) for item in items if isinstance(item, dict)}
+            if isinstance(items, list)
+            else set()
+        )
         return (
             data.get("status") == "REQUESTED"
             and _same(data.get("fromBranchId"), arguments.get("fromBranchId"))
             and _same(data.get("toBranchId"), arguments.get("toBranchId"))
+            and observed_units == {str(unit_id) for unit_id in arguments.get("unitIds", [])}
         )
     if tool_name == "approve_stock_transfer":
-        return data.get("status") == "APPROVED"
+        return (
+            _same(data.get("id"), arguments.get("transferId")) and data.get("status") == "APPROVED"
+        )
     if tool_name == "reject_stock_transfer":
-        return data.get("status") == "REJECTED"
+        return (
+            _same(data.get("id"), arguments.get("transferId")) and data.get("status") == "REJECTED"
+        )
     if tool_name == "create_payment_checkout":
-        return _same(data.get("amountVnd"), arguments.get("amountVnd")) and _same(
-            data.get("purpose"), arguments.get("purpose")
+        return (
+            _same(data.get("orderId"), arguments.get("orderId"))
+            and _same(data.get("amountVnd"), arguments.get("amountVnd"))
+            and _same(data.get("purpose"), arguments.get("purpose"))
         )
     if tool_name == "request_refund":
-        return data.get("status") == "REQUESTED" and _same(
-            data.get("amountVnd"), arguments.get("amountVnd")
+        return (
+            data.get("status") == "REQUESTED"
+            and _same(data.get("paymentId"), arguments.get("paymentId"))
+            and _same(data.get("amountVnd"), arguments.get("amountVnd"))
         )
     return False
 

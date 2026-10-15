@@ -118,7 +118,7 @@ READ_TOOL_POLICIES: Mapping[str, ToolPolicy] = {
     "get_payment_summary": ToolPolicy("get_payment_summary", "read", "payments:read", True),
     "check_availability": ToolPolicy("check_availability", "read", "rentals:read", True),
     "find_rental_orders": ToolPolicy("find_rental_orders", "read", "rentals:read", True),
-    "get_unit_schedule": ToolPolicy("get_unit_schedule", "read", "scheduling:read", True),
+    "get_unit_schedule": ToolPolicy("get_unit_schedule", "read", "inventory:read", True),
     "get_stock_transfer": ToolPolicy(
         "get_stock_transfer", "read", "transfers:read", True, polling=True
     ),
@@ -139,7 +139,7 @@ WRITE_TOOL_POLICIES: Mapping[str, ToolPolicy] = {
     "create_unit_block": ToolPolicy(
         "create_unit_block",
         "write",
-        "scheduling:manage",
+        "inventory:manage",
         False,
         requires_confirmation=True,
         readback_tool="get_unit_block",
@@ -147,7 +147,7 @@ WRITE_TOOL_POLICIES: Mapping[str, ToolPolicy] = {
     "update_unit_block": ToolPolicy(
         "update_unit_block",
         "write",
-        "scheduling:manage",
+        "inventory:manage",
         False,
         requires_confirmation=True,
         readback_tool="get_unit_block",
@@ -155,7 +155,7 @@ WRITE_TOOL_POLICIES: Mapping[str, ToolPolicy] = {
     "cancel_unit_block": ToolPolicy(
         "cancel_unit_block",
         "write",
-        "scheduling:manage",
+        "inventory:manage",
         False,
         requires_confirmation=True,
         readback_tool="get_unit_block",
@@ -234,8 +234,17 @@ WRITE_TOOL_POLICIES: Mapping[str, ToolPolicy] = {
 }
 
 WRITE_GOAL_ARGUMENTS: Mapping[str, tuple[str, ...]] = {
-    "create_unit_block": ("unitId", "plannedStartAt", "plannedDueAt", "reason"),
-    "update_unit_block": ("blockId", "plannedStartAt", "plannedDueAt", "reason"),
+    "create_unit_block": ("unitId", "blockType", "blockedFrom", "blockedUntil", "reason"),
+    "update_unit_block": (
+        "blockId",
+        "blockType",
+        "blockedFrom",
+        "blockedUntil",
+        "assignedTo",
+        "costVnd",
+        "reason",
+        "notes",
+    ),
     "cancel_unit_block": ("blockId", "reason"),
     "extend_rental_order": ("orderId", "newDueAt"),
     "reallocate_rental_item": ("orderId", "orderItemId", "unitId"),
@@ -362,6 +371,63 @@ def validate_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> None:
         range_end = _parse_datetime(end_value, "to") if end_value is not None else None
         if range_start is not None and range_end is not None and range_end <= range_start:
             raise ValueError("to must be after from")
+    elif tool_name == "create_unit_block":
+        block_type = arguments.get("blockType")
+        if block_type not in {
+            "CLEANING",
+            "REPAIR",
+            "ALTERATION",
+            "INSPECTION",
+            "INTERNAL_USE",
+            "MANUAL",
+            "OTHER",
+        }:
+            raise ValueError("blockType is invalid")
+        blocked_from = _parse_datetime(arguments.get("blockedFrom"), "blockedFrom")
+        blocked_until = _parse_datetime(arguments.get("blockedUntil"), "blockedUntil")
+        if blocked_until <= blocked_from:
+            raise ValueError("blockedUntil must be after blockedFrom")
+        reason = arguments.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason is required")
+    elif tool_name == "update_unit_block":
+        mutable_fields = {
+            "blockType",
+            "blockedFrom",
+            "blockedUntil",
+            "assignedTo",
+            "costVnd",
+            "reason",
+            "notes",
+        }
+        if not mutable_fields.intersection(arguments):
+            raise ValueError("at least one unit block field must be updated")
+        if "blockType" in arguments and arguments["blockType"] not in {
+            "CLEANING",
+            "REPAIR",
+            "ALTERATION",
+            "INSPECTION",
+            "INTERNAL_USE",
+            "MANUAL",
+            "OTHER",
+        }:
+            raise ValueError("blockType is invalid")
+        update_blocked_from = (
+            _parse_datetime(arguments["blockedFrom"], "blockedFrom")
+            if "blockedFrom" in arguments
+            else None
+        )
+        update_blocked_until = (
+            _parse_datetime(arguments["blockedUntil"], "blockedUntil")
+            if "blockedUntil" in arguments
+            else None
+        )
+        if (
+            update_blocked_from is not None
+            and update_blocked_until is not None
+            and update_blocked_until <= update_blocked_from
+        ):
+            raise ValueError("blockedUntil must be after blockedFrom")
     elif tool_name == "create_stock_transfer":
         unit_ids = arguments.get("unitIds")
         if not isinstance(unit_ids, list) or not 1 <= len(unit_ids) <= 100:
@@ -396,9 +462,7 @@ def validate_write_matches_goal(
                 else expected
             )
             actual_value: object = (
-                [str(item).lower() for item in actual]
-                if isinstance(actual, list)
-                else actual
+                [str(item).lower() for item in actual] if isinstance(actual, list) else actual
             )
         else:
             expected_value = str(expected).lower()

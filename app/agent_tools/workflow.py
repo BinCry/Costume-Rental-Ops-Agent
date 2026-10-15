@@ -110,7 +110,6 @@ async def run_write_workflow(
     config: RunnableConfig = {
         "configurable": {
             "thread_id": case_id,
-            "checkpoint_ns": "agent-write-workflow",
         }
     }
     async with AsyncPostgresSaver.from_conn_string(settings.AI_DATABASE_URL) as checkpointer:

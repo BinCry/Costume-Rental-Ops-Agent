@@ -302,18 +302,14 @@ def validate_skill_registry(skills: tuple[BusinessSkill, ...] = SKILLS) -> None:
         for tool_name in skill.allowed_tools:
             policy = ALL_TOOL_POLICIES[tool_name]
             if policy.requires_confirmation and not skill.requires_confirmation:
-                raise ValueError(
-                    f"{skill.name}: {tool_name} requires requester confirmation"
-                )
+                raise ValueError(f"{skill.name}: {tool_name} requires requester confirmation")
             if policy.requires_approval and not skill.requires_approval:
                 raise ValueError(f"{skill.name}: {tool_name} requires approval")
 
         for goal_type in skill.goal_types:
             previous = goal_owners.get(goal_type)
             if previous is not None:
-                raise ValueError(
-                    f"{goal_type.value} is owned by both {previous} and {skill.name}"
-                )
+                raise ValueError(f"{goal_type.value} is owned by both {previous} and {skill.name}")
             goal_owners[goal_type] = skill.name
 
         for step in skill.workflow:
@@ -323,6 +319,13 @@ def validate_skill_registry(skills: tuple[BusinessSkill, ...] = SKILLS) -> None:
                 raise ValueError(
                     f"{skill.name}: workflow tool {step.tool_name} is not in allowed_tools"
                 )
+
+    missing_goals = set(AgentGoalType) - set(goal_owners)
+    if missing_goals:
+        raise ValueError(
+            "Skill registry does not cover goals: "
+            + ", ".join(sorted(goal.value for goal in missing_goals))
+        )
 
 
 validate_skill_registry()
