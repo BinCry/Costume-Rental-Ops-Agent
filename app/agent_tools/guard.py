@@ -668,6 +668,20 @@ def render_grounded_answer(
     if observation is None or not isinstance(observation.data, dict):
         return fallback
     data = observation.data
+    if goal.goal_type is AgentGoalType.KNOWLEDGE_ANSWER:
+        results = data.get("results")
+        citations: list[str] = []
+        if isinstance(results, list):
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                citation = item.get("citation")
+                if isinstance(citation, str) and citation.strip() and citation not in citations:
+                    citations.append(citation)
+        if citations:
+            sources = "\n".join(f"- {citation}" for citation in citations)
+            return f"{fallback.rstrip()}\n\nNguồn đã truy xuất:\n{sources}"
+        return fallback
     if goal.goal_type is AgentGoalType.RENTAL_ORDER_LOOKUP:
         order_label = data.get("orderCode") or data.get("id")
         return (

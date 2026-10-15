@@ -862,6 +862,31 @@ def test_live_answer_is_rendered_from_authoritative_observation() -> None:
     assert "Sai trạng thái" not in answer
 
 
+def test_knowledge_answer_is_rendered_with_retrieved_citation() -> None:
+    goal = infer_goal("What is the rental cancellation policy?")
+    guard = ExecutionGuard(max_tool_calls=6, remaining_case_steps=6)
+    guard.before_tool("search_knowledge", {"query": goal.summary})
+    citation = "Rental policy — Cancellation"
+    guard.after_tool(
+        observation={"status": "ok"},
+        evidence_refs=("rental-policy",),
+        data={"results": [{"sourceId": "rental-policy", "citation": citation}]},
+    )
+
+    answer = render_grounded_answer(goal, guard.observations, "Cancellation requires notice.")
+    verification = verify_completion(
+        user_message=goal.summary,
+        answer=answer,
+        evidence_count=1,
+        tool_calls=1,
+        goal=goal,
+        observations=guard.observations,
+    )
+
+    assert citation in answer
+    assert verification.achieved
+
+
 @pytest.mark.asyncio
 async def test_client_sends_only_fixed_internal_endpoint_and_trusted_headers() -> None:
     seen: dict[str, object] = {}
