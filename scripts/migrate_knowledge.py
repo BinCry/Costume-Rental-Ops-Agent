@@ -8,6 +8,9 @@ from app.config import get_settings
 MIGRATIONS = (
     ("001_init_pgvector_python", "001_init_pgvector.sql"),
     ("002_agent_cases_python", "002_agent_cases.sql"),
+    ("003_agent_runtime_python", "003_agent_runtime.sql"),
+    ("004_agent_run_budgets_python", "004_agent_run_budgets.sql"),
+    ("005_agent_sync_runtime_python", "005_agent_sync_runtime.sql"),
 )
 
 

@@ -13,6 +13,7 @@ from app.agent_tools.models import (
 )
 
 _EXECUTE_PATH: Final = "/api/v1/internal/agent-tools/execute"
+_AUTHORIZE_APPROVAL_PATH: Final = "/api/v1/internal/agent-tools/authorize-approval"
 
 
 class ToolInvocationError(Exception):
@@ -75,6 +76,51 @@ class AgentToolClient:
         timeout = httpx.Timeout(self._timeout_seconds)
         async with httpx.AsyncClient(base_url=self._base_url, timeout=timeout) as client:
             return await self._post(client, headers, payload)
+
+    async def authorize_approval(
+        self,
+        *,
+        actor_id: str,
+        request_id: str,
+        required_permission: str,
+        branch_ids: tuple[str, ...],
+    ) -> bool:
+        """Ask Studio to validate approver permission and branch scope."""
+        headers = {
+            "X-AI-Service-Key": self._service_key,
+            "X-Actor-Id": actor_id,
+            "X-Request-Id": request_id,
+            "X-Agent-Tools-Contract": AGENT_TOOLS_CONTRACT_VERSION,
+        }
+        payload = {
+            "requiredPermission": required_permission,
+            "branchIds": list(branch_ids),
+        }
+        try:
+            if self._client is not None:
+                response = await self._client.post(
+                    _AUTHORIZE_APPROVAL_PATH, headers=headers, json=payload
+                )
+            else:
+                timeout = httpx.Timeout(self._timeout_seconds)
+                async with httpx.AsyncClient(base_url=self._base_url, timeout=timeout) as client:
+                    response = await client.post(
+                        _AUTHORIZE_APPROVAL_PATH, headers=headers, json=payload
+                    )
+        except httpx.HTTPError as error:
+            raise ToolInvocationError(
+                "TOOL_DEPENDENCY_UNAVAILABLE", "Approval authorization is unavailable"
+            ) from error
+        if response.status_code == 403:
+            return False
+        if not response.is_success:
+            raise ToolInvocationError("TOOL_PROTOCOL_ERROR", "Approval authorization failed")
+        body = response.json()
+        return bool(
+            isinstance(body, dict)
+            and isinstance(body.get("data"), dict)
+            and body["data"].get("decision") == "allowed"
+        )
 
     async def _post(
         self,

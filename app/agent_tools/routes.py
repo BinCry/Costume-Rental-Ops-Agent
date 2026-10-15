@@ -5,11 +5,18 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends
 
-from app.agent_tools.runtime import answer_agent_message, read_agent_case
+from app.agent_tools.runtime import (
+    answer_agent_message,
+    cancel_agent_case,
+    decide_case_approval,
+    decide_case_confirmation,
+    read_agent_case,
+)
 from app.auth import require_actor, require_internal_service
 from app.models import (
     ActorContext,
     AgentCaseResponse,
+    AgentDecisionInput,
     AgentMessageData,
     AgentMessageInput,
     ErrorResponse,
@@ -23,6 +30,8 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     401: {"model": ErrorResponse, "description": "Authentication failed"},
     403: {"model": ErrorResponse, "description": "Access denied"},
     404: {"model": ErrorResponse, "description": "Case not found"},
+    409: {"model": ErrorResponse, "description": "Case state conflict"},
+    504: {"model": ErrorResponse, "description": "Dependency timeout"},
     503: {"model": ErrorResponse, "description": "Dependency unavailable"},
 }
 
@@ -55,3 +64,78 @@ async def get_case_state(
 ) -> SuccessResponse[AgentCaseResponse]:
     result = await read_agent_case(actor, case_id)
     return SuccessResponse(success=True, data=result, message="Agent case retrieved")
+
+
+@router.post(
+    "/cases/{case_id}/confirmations/{confirmation_id}/confirm",
+    response_model=SuccessResponse[AgentCaseResponse],
+    responses=ERROR_RESPONSES,
+)
+async def confirm_case_action(
+    case_id: UUID,
+    confirmation_id: UUID,
+    actor: Annotated[ActorContext, Depends(require_actor)],
+    body: AgentDecisionInput | None = None,
+) -> SuccessResponse[AgentCaseResponse]:
+    result = await decide_case_confirmation(
+        actor, case_id, confirmation_id, True, body.reason if body else None
+    )
+    return SuccessResponse(success=True, data=result, message="Agent confirmation recorded")
+
+
+@router.post(
+    "/cases/{case_id}/confirmations/{confirmation_id}/reject",
+    response_model=SuccessResponse[AgentCaseResponse],
+    responses=ERROR_RESPONSES,
+)
+async def reject_case_action(
+    case_id: UUID,
+    confirmation_id: UUID,
+    actor: Annotated[ActorContext, Depends(require_actor)],
+    body: AgentDecisionInput | None = None,
+) -> SuccessResponse[AgentCaseResponse]:
+    result = await decide_case_confirmation(
+        actor, case_id, confirmation_id, False, body.reason if body else None
+    )
+    return SuccessResponse(success=True, data=result, message="Agent confirmation rejected")
+
+
+@router.post(
+    "/approvals/{approval_id}/approve",
+    response_model=SuccessResponse[AgentCaseResponse],
+    responses=ERROR_RESPONSES,
+)
+async def approve_case_action(
+    approval_id: UUID,
+    actor: Annotated[ActorContext, Depends(require_actor)],
+    body: AgentDecisionInput | None = None,
+) -> SuccessResponse[AgentCaseResponse]:
+    result = await decide_case_approval(actor, approval_id, True, body.reason if body else None)
+    return SuccessResponse(success=True, data=result, message="Agent approval recorded")
+
+
+@router.post(
+    "/approvals/{approval_id}/reject",
+    response_model=SuccessResponse[AgentCaseResponse],
+    responses=ERROR_RESPONSES,
+)
+async def reject_approval_action(
+    approval_id: UUID,
+    actor: Annotated[ActorContext, Depends(require_actor)],
+    body: AgentDecisionInput | None = None,
+) -> SuccessResponse[AgentCaseResponse]:
+    result = await decide_case_approval(actor, approval_id, False, body.reason if body else None)
+    return SuccessResponse(success=True, data=result, message="Agent approval rejected")
+
+
+@router.post(
+    "/cases/{case_id}/cancel",
+    response_model=SuccessResponse[AgentCaseResponse],
+    responses=ERROR_RESPONSES,
+)
+async def cancel_case_action(
+    case_id: UUID,
+    actor: Annotated[ActorContext, Depends(require_actor)],
+) -> SuccessResponse[AgentCaseResponse]:
+    result = await cancel_agent_case(actor, case_id)
+    return SuccessResponse(success=True, data=result, message="Agent case cancelled")

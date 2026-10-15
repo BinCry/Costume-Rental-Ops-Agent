@@ -162,27 +162,35 @@ def custom_openapi() -> dict[str, Any]:
             "/api/v1/knowledge/search": [{"InternalServiceKey": []}],
             "/api/v1/agent/messages": [{"InternalServiceKey": []}],
             "/api/v1/agent/cases/{case_id}": [{"InternalServiceKey": []}],
+            "/api/v1/agent/cases/{case_id}/confirmations/{confirmation_id}/confirm": [
+                {"InternalServiceKey": []}
+            ],
+            "/api/v1/agent/cases/{case_id}/confirmations/{confirmation_id}/reject": [
+                {"InternalServiceKey": []}
+            ],
+            "/api/v1/agent/cases/{case_id}/cancel": [{"InternalServiceKey": []}],
         }
         for path, security in knowledge_security.items():
             path_item = paths.get(path)
             if not isinstance(path_item, dict):
                 continue
-            operation = path_item.get("post")
-            if not isinstance(operation, dict):
-                continue
-            responses = operation.get("responses")
-            if isinstance(responses, dict):
-                responses.pop("422", None)
-            parameters = operation.get("parameters")
-            if isinstance(parameters, list):
-                for parameter in parameters:
-                    if (
-                        isinstance(parameter, dict)
-                        and parameter.get("in") == "header"
-                        and parameter.get("name") in {"x-actor-id", "x-knowledge-audiences"}
-                    ):
-                        parameter["required"] = True
-            operation["security"] = security
+            for method in ("get", "post"):
+                operation = path_item.get(method)
+                if not isinstance(operation, dict):
+                    continue
+                responses = operation.get("responses")
+                if isinstance(responses, dict):
+                    responses.pop("422", None)
+                parameters = operation.get("parameters")
+                if isinstance(parameters, list):
+                    for parameter in parameters:
+                        if (
+                            isinstance(parameter, dict)
+                            and parameter.get("in") == "header"
+                            and parameter.get("name") in {"x-actor-id", "x-knowledge-audiences"}
+                        ):
+                            parameter["required"] = True
+                operation["security"] = security
 
     app.openapi_schema = schema
     return schema

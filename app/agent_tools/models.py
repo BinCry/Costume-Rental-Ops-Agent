@@ -16,6 +16,7 @@ class AgentCaseState(StrEnum):
     NEW = "NEW"
     ANALYZING = "ANALYZING"
     PLAN_READY = "PLAN_READY"
+    WAITING_INPUT = "WAITING_INPUT"
     WAITING_CONFIRMATION = "WAITING_CONFIRMATION"
     WAITING_APPROVAL = "WAITING_APPROVAL"
     EXECUTING = "EXECUTING"
@@ -25,6 +26,31 @@ class AgentCaseState(StrEnum):
     HANDED_OFF = "HANDED_OFF"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+
+
+class AgentRunStatus(StrEnum):
+    RUNNING = "RUNNING"
+    PAUSED = "PAUSED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class AgentTerminationReason(StrEnum):
+    GOAL_ACHIEVED = "GOAL_ACHIEVED"
+    INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+    HUMAN_INPUT_REQUIRED = "HUMAN_INPUT_REQUIRED"
+    CONFIRMATION_REJECTED = "CONFIRMATION_REJECTED"
+    APPROVAL_REJECTED = "APPROVAL_REJECTED"
+    BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
+    LOOP_DETECTED = "LOOP_DETECTED"
+    NO_PROGRESS = "NO_PROGRESS"
+    TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN"
+    DEPENDENCY_FAILURE = "DEPENDENCY_FAILURE"
+    POLICY_VIOLATION = "POLICY_VIOLATION"
+    INVALID_TOOL_ARGUMENTS = "INVALID_TOOL_ARGUMENTS"
+    VERIFICATION_FAILED = "VERIFICATION_FAILED"
+    CANCELLED_BY_USER = "CANCELLED_BY_USER"
 
 
 class ToolExecutionStatus(StrEnum):
@@ -37,6 +63,70 @@ class ToolExecutionStatus(StrEnum):
     VERSION_CONFLICT = "version_conflict"
     DEPENDENCY_UNAVAILABLE = "dependency_unavailable"
     UNKNOWN_OUTCOME = "unknown_outcome"
+
+
+class AgentGoalType(StrEnum):
+    KNOWLEDGE_ANSWER = "KNOWLEDGE_ANSWER"
+    RENTAL_ORDER_LOOKUP = "RENTAL_ORDER_LOOKUP"
+    RENTAL_ORDER_SEARCH = "RENTAL_ORDER_SEARCH"
+    PAYMENT_SUMMARY = "PAYMENT_SUMMARY"
+    AVAILABILITY_CHECK = "AVAILABILITY_CHECK"
+    UNIT_SCHEDULE = "UNIT_SCHEDULE"
+    STOCK_TRANSFER_LOOKUP = "STOCK_TRANSFER_LOOKUP"
+    UNIT_BLOCK_CHANGE = "UNIT_BLOCK_CHANGE"
+    RENTAL_EXTENSION = "RENTAL_EXTENSION"
+    RENTAL_REALLOCATION = "RENTAL_REALLOCATION"
+    RENTAL_CANCELLATION = "RENTAL_CANCELLATION"
+    STOCK_TRANSFER_CREATE = "STOCK_TRANSFER_CREATE"
+    STOCK_TRANSFER_DECISION = "STOCK_TRANSFER_DECISION"
+    PAYMENT_CHECKOUT = "PAYMENT_CHECKOUT"
+    REFUND_REQUEST = "REFUND_REQUEST"
+    GENERAL_ASSISTANCE = "GENERAL_ASSISTANCE"
+
+
+class AgentGoalConstraints(ApiModel):
+    """Deterministic boundaries attached to a case goal."""
+
+    allowed_tools: tuple[str, ...] = ()
+    requires_confirmation: bool = False
+    requires_approval: bool = False
+    max_steps: int = Field(default=6, ge=1, le=24)
+
+
+class AgentPlanStep(ApiModel):
+    order: int = Field(ge=1, le=24)
+    action: str = Field(min_length=1, max_length=500)
+    tool_name: str | None = None
+    verification: str = Field(min_length=1, max_length=500)
+
+
+class AgentGoalSpec(ApiModel):
+    summary: str
+    goal_type: AgentGoalType
+    status: str = "active"
+    required_tools: tuple[str, ...] = ()
+    required_identifiers: tuple[str, ...] = ()
+    missing_inputs: tuple[str, ...] = ()
+    success_criteria: tuple[str, ...] = ()
+    skill_name: str | None = None
+    constraints: AgentGoalConstraints = Field(default_factory=AgentGoalConstraints)
+    plan: tuple[AgentPlanStep, ...] = ()
+
+
+class ActionProposal(ApiModel):
+    """Untrusted model proposal; it becomes executable only after being frozen."""
+
+    tool_name: str = Field(pattern=r"^[a-z][a-z0-9_]{1,79}$")
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    expected_version: int | None = Field(default=None, ge=1)
+    summary: str = Field(min_length=1, max_length=2_000)
+
+
+class FrozenAction(ActionProposal):
+    payload_hash: str = Field(min_length=64, max_length=64)
+    readback_tool: str
+    confirmation_id: UUID | None = None
+    approval_id: UUID | None = None
 
 
 class AgentToolExecutionRequest(ApiModel):

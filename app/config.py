@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     STUDIO_API_URL: str | None = None
     AGENT_TOOL_TIMEOUT_SECONDS: float = Field(default=15, gt=0, le=120)
     AGENT_MAX_STEPS_PER_TURN: int = Field(default=6, ge=1, le=12)
+    AGENT_MAX_MODEL_CALLS_PER_TURN: int = Field(default=6, ge=1, le=20)
+    AGENT_MAX_STEPS_PER_CASE: int = Field(default=24, ge=1, le=100)
+    AGENT_MAX_TOKENS_PER_CASE: int = Field(default=30_000, ge=1_000, le=1_000_000)
+    AGENT_MAX_TURN_SECONDS: float = Field(default=25, gt=0, le=120)
+    AGENT_LOOP_WINDOW: int = Field(default=6, ge=2, le=20)
+    AGENT_LOOP_REPEAT_LIMIT: int = Field(default=2, ge=2, le=5)
+    AGENT_STALL_LIMIT: int = Field(default=5, ge=1, le=12)
+    AGENT_CONFIRMATION_TTL_MINUTES: int = Field(default=30, ge=1, le=240)
+    AGENT_APPROVAL_TTL_HOURS: int = Field(default=24, ge=1, le=168)
     AI_WEB_ALLOWED_ORIGINS: Annotated[tuple[str, ...], NoDecode] = ("http://localhost:5173",)
 
     @field_validator("GROQ_API_KEY", "GEMINI_API_KEY", "AI_INTERNAL_API_KEY", mode="before")

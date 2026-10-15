@@ -96,6 +96,10 @@ class AgentMessageInput(RequestModel):
     case_id: UUID | None = None
 
 
+class AgentDecisionInput(RequestModel):
+    reason: str | None = Field(default=None, max_length=2_000)
+
+
 class AgentEvidence(ApiModel):
     source_type: Literal["knowledge", "live_tool"]
     source_id: str
@@ -103,13 +107,54 @@ class AgentEvidence(ApiModel):
     observed_at: str | None = None
 
 
+class AgentGoal(ApiModel):
+    summary: str
+    status: str = "active"
+    goal_type: str | None = None
+    skill_name: str | None = None
+    constraints: dict[str, Any] = Field(default_factory=dict)
+    plan: list[dict[str, Any]] = Field(default_factory=list)
+    success_criteria: list[str] = Field(default_factory=list)
+
+
+class AgentHandoff(ApiModel):
+    reason: str
+    goal: str | None = None
+    attempted_tools: list[str] = Field(default_factory=list)
+    successful_tools: list[str] = Field(default_factory=list)
+    failed_tools: list[str] = Field(default_factory=list)
+    evidence_count: int = 0
+    next_action: str
+    side_effects: str = "none"
+
+
+class PendingConfirmation(ApiModel):
+    confirmation_id: UUID
+    summary: str
+    expires_at: str
+
+
+class PendingApproval(ApiModel):
+    approval_id: UUID
+    summary: str
+    required_permission: str
+    expires_at: str
+
+
 class AgentCaseResponse(ApiModel):
     case_id: UUID
     state: str
     message: str
     evidence: list[AgentEvidence]
-    pending_confirmation: None = None
-    pending_approval: None = None
+    run_status: str | None = None
+    goal: AgentGoal | None = None
+    steps_used: int = 0
+    tokens_used: int = 0
+    termination_reason: str | None = None
+    pending_input: str | None = None
+    pending_confirmation: PendingConfirmation | None = None
+    pending_approval: PendingApproval | None = None
+    handoff: AgentHandoff | None = None
     completed: bool
 
 

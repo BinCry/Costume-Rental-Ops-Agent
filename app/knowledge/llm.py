@@ -25,7 +25,7 @@ class ProviderFailure(Exception):
         self.provider = provider
         self.retryable = retryable
 
- 
+
 def _configured_providers(settings: Settings) -> list[Provider]:
     providers: list[Provider] = []
     if settings.GROQ_API_KEY:

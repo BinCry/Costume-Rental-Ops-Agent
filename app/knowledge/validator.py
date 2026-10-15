@@ -234,12 +234,11 @@ def validate_knowledge_base(
         elif metadata.get("business_authority") is True:
             failures.append(f"{label}: business_authority true requires approved status")
 
-        if metadata.get("status") == "verified_from_system" and metadata.get(
-            "source_type"
-        ) not in {"technical_implementation", "derived_knowledge_base"}:
-            failures.append(
-                f"{label}: verified_from_system requires technical or derived sources"
-            )
+        if metadata.get("status") == "verified_from_system" and metadata.get("source_type") not in {
+            "technical_implementation",
+            "derived_knowledge_base",
+        }:
+            failures.append(f"{label}: verified_from_system requires technical or derived sources")
 
         if (
             metadata.get("retrieval_enabled") is True

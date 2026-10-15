@@ -52,9 +52,7 @@ def _usable_sources(results: list[SearchResult]) -> list[SearchResult]:
 
 def _plain_text(value: str) -> str:
     normalized = unicodedata.normalize("NFD", value.casefold())
-    plain = "".join(
-        character for character in normalized if not unicodedata.combining(character)
-    )
+    plain = "".join(character for character in normalized if not unicodedata.combining(character))
     return plain.replace("đ", "d")
 
 
@@ -70,9 +68,7 @@ def _requires_business_authority(query: str) -> bool:
         asks_for_explanation = EXPLANATION_PATTERN.search(plain_query) is not None
         explains_known_status = KNOWN_PAYMENT_STATUS_PATTERN.search(plain_query) is not None
         compares_order_and_payment = "don" in plain_query and "thanh toan" in plain_query
-        return not (
-            asks_for_explanation and (explains_known_status or compares_order_and_payment)
-        )
+        return not (asks_for_explanation and (explains_known_status or compares_order_and_payment))
     return EXPLANATION_PATTERN.search(plain_query) is None
 
 
