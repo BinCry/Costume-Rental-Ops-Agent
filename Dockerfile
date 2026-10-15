@@ -28,9 +28,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8001 \
     KNOWLEDGE_MODEL_CACHE_DIR=/app/.cache/huggingface
 
-# PyTorch CPU wheels require libgomp at runtime.
+# PyTorch CPU wheels require libgomp at runtime. Coolify's URL healthcheck
+# probes containers with curl (falling back to wget), so keep curl available
+# in the production image as well.
 RUN apt-get update \
-    && apt-get install --no-install-recommends --yes libgomp1 \
+    && apt-get install --no-install-recommends --yes curl libgomp1 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --home-dir /app app
