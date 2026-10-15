@@ -1,5 +1,5 @@
 from collections.abc import Iterator
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -117,7 +117,12 @@ async def test_agent_approval_uses_trusted_actor(monkeypatch: pytest.MonkeyPatch
     approval_id = uuid4()
     captured: dict[str, object] = {}
 
-    async def fake_decide(actor, approval, approve, reason=None):
+    async def fake_decide(
+        actor: ActorContext,
+        approval: UUID,
+        approve: bool,
+        reason: str | None = None,
+    ) -> AgentCaseResponse:
         captured.update(actor=actor, approval=approval, approve=approve, reason=reason)
         return response()
 

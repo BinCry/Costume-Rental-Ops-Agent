@@ -283,11 +283,12 @@ def test_write_goal_has_explicit_confirmation_and_verification_plan() -> None:
 
 def test_transfer_decision_message_is_routed_to_existing_approval_endpoint() -> None:
     goal = infer_goal("Duyệt chuyển phiếu 00000000-0000-4000-8000-000000000001")
+    question = missing_input_question(goal)
 
     assert goal.goal_type is AgentGoalType.STOCK_TRANSFER_DECISION
     assert goal.constraints.allowed_tools == ()
-    assert missing_input_question(goal) is not None
-    assert "endpoint" in missing_input_question(goal)
+    assert question is not None
+    assert "endpoint" in question
 
 
 def test_availability_predicate_accepts_available_false_as_valid_result() -> None:

@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime
 from hashlib import sha256
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -11,7 +12,9 @@ from app.agent_tools.models import AgentToolExecutionResult, ToolExecutionStatus
 from app.models import ActorContext
 
 
-def frozen(tool_name: str, arguments: dict[str, object], expected_version: int | None = None):
+def frozen(
+    tool_name: str, arguments: dict[str, object], expected_version: int | None = None
+) -> tuple[dict[str, Any], str]:
     unsigned = {
         "toolName": tool_name,
         "arguments": arguments,
@@ -40,7 +43,7 @@ async def test_versioned_write_succeeds_only_after_readback(
     )
     calls: list[str] = []
 
-    async def fake_call(**kwargs):
+    async def fake_call(**kwargs: Any) -> AgentToolExecutionResult:
         calls.append(kwargs["tool_name"])
         data = (
             {"id": order_id, "version": 5}
@@ -80,7 +83,7 @@ async def test_unknown_write_is_reconciled_without_retry(monkeypatch: pytest.Mon
     )
     calls: list[str] = []
 
-    async def fake_call(**kwargs):
+    async def fake_call(**kwargs: Any) -> AgentToolExecutionResult:
         calls.append(kwargs["tool_name"])
         if len(calls) == 1:
             raise ToolInvocationError("TOOL_OUTCOME_UNKNOWN", "timeout")

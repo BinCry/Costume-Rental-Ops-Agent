@@ -1,13 +1,14 @@
 from typing import Any
 
 import pytest
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command, Interrupt
 
 from app.agent_tools.workflow import WriteWorkflowState, build_write_workflow
 
 
-def config(case_id: str) -> dict[str, dict[str, str]]:
+def config(case_id: str) -> RunnableConfig:
     return {
         "configurable": {
             "thread_id": case_id,
