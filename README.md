@@ -103,6 +103,41 @@ Trong Coolify, dùng hostname/nội bộ URL thật được cấp cho từng re
 
 Endpoint `answer` dùng Groq làm primary và Gemini làm fallback; cấu hình bằng `GROQ_API_KEY` và `GEMINI_API_KEY`. Fallback chỉ xảy ra khi timeout, HTTP 429 hoặc HTTP 5xx, không xảy ra khi knowledge base thiếu dữ liệu. Cả hai endpoint đều trả citation và từ chối trả lời khi không có ngữ cảnh đủ tin cậy.
 
+## Agent runtime
+
+Agent chạy đồng bộ, không cần worker/job queue riêng. Nhánh đọc dùng LangChain
+`create_agent` làm ReAct loop và LangGraph checkpoint theo `case_id`. Nhánh ghi
+dùng một outer `StateGraph`: graph dừng bằng `interrupt()` tại confirmation và
+approval, sau đó endpoint quyết định resume đúng checkpoint bằng
+`Command(resume=...)`.
+
+Mỗi message trước tiên được ánh xạ vào một goal có cấu trúc gồm `goalType`,
+`skillName`, constraints, plan và success criteria. `skills.py` chứa các
+business playbook cho policy, tra cứu đơn, availability/schedule, gia hạn,
+reallocation, hủy đơn, unit block, transfer, checkout và refund. Skill là một
+tool allowlist cứng: ReAct chỉ nhìn thấy read tools của skill hiện tại, còn
+write planner chỉ được đề xuất write tool nằm trong đúng skill đó.
+
+Mọi write action được đóng băng bằng payload hash, có idempotency key xác định,
+được Studio API kiểm tra lại quyền/branch/version và chỉ thành công sau read-back.
+Timeout write không được retry mù. Các feature flag write trong `.env.example`
+mặc định vẫn là `false`; chỉ bật từng nhóm sau khi chạy migration
+`python scripts/migrate_knowledge.py` và hoàn tất E2E trên đúng môi trường.
+
+Luồng write chuẩn:
+
+```text
+message -> proposal -> fresh read -> frozen action -> confirmation interrupt
+        -> execute/read-back hoặc approval interrupt -> execute/read-back
+        -> SUCCEEDED / CANCELLED / HANDED_OFF
+```
+
+Mỗi case bị giới hạn 6 vòng/tool calls một turn, 24 bước và 30.000 model token
+cho toàn case. Token của write planner cũng được tính vào budget. Khi loop,
+stall, hết budget, vi phạm policy hoặc không xác minh được write outcome, API
+trả `handoff` có reason, tool/evidence đã quan sát, bước tiếp theo và trạng thái
+side effect; write timeout không được tự động retry.
+
 ## Docker và CI/CD
 
 Build production image từ chính thư mục Ops Agent để `.dockerignore` cục bộ
