@@ -67,9 +67,7 @@ async def test_agent_message_uses_trusted_actor_and_returns_standard_envelope(
 ) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_answer(
-        actor: ActorContext, message: str, case_id: object
-    ) -> AgentCaseResponse:
+    async def fake_answer(actor: ActorContext, message: str, case_id: object) -> AgentCaseResponse:
         captured.update(actor=actor, message=message, case_id=case_id)
         return response()
 
@@ -84,9 +82,7 @@ async def test_agent_message_uses_trusted_actor_and_returns_standard_envelope(
 
     assert result.status_code == 200
     assert result.json()["data"]["result"]["caseId"] == str(CASE_ID)
-    assert captured["actor"] == ActorContext(
-        user_id=ACTOR_ID, audiences=("customer", "shared")
-    )
+    assert captured["actor"] == ActorContext(user_id=ACTOR_ID, audiences=("customer", "shared"))
     assert captured["message"] == "Tình trạng đơn của tôi?"
     assert captured["case_id"] is None
 
@@ -114,3 +110,28 @@ def test_agent_openapi_has_internal_service_security() -> None:
 
     assert message["security"] == [{"InternalServiceKey": []}]
     assert case["security"] == [{"InternalServiceKey": []}]
+
+
+@pytest.mark.asyncio
+async def test_agent_approval_uses_trusted_actor(monkeypatch: pytest.MonkeyPatch) -> None:
+    approval_id = uuid4()
+    captured: dict[str, object] = {}
+
+    async def fake_decide(actor, approval, approve, reason=None):
+        captured.update(actor=actor, approval=approval, approve=approve, reason=reason)
+        return response()
+
+    monkeypatch.setattr(routes, "decide_case_approval", fake_decide)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        result = await client.post(
+            f"/api/v1/agent/approvals/{approval_id}/approve",
+            headers=HEADERS,
+            json={"reason": "Reviewed"},
+        )
+
+    assert result.status_code == 200
+    assert captured["approval"] == approval_id
+    assert captured["approve"] is True
+    assert captured["reason"] == "Reviewed"
+    assert captured["actor"] == ActorContext(user_id=ACTOR_ID, audiences=("customer", "shared"))

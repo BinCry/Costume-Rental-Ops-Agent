@@ -56,8 +56,8 @@ def test_generated_source_reference_section_is_removed() -> None:
 def test_generated_inline_citations_are_removed() -> None:
     answer = (
         "Phí trả trễ là 20% mỗi ngày"
-        "【source citation=\"Chính sách — Trả trễ\" status=\"approved\"】.\n\n"
-        "Nguồn: <source citation=\"Chính sách — Trả trễ\"/>"
+        '【source citation="Chính sách — Trả trễ" status="approved"】.\n\n'
+        'Nguồn: <source citation="Chính sách — Trả trễ"/>'
     )
 
     assert service._strip_generated_citations(answer) == "Phí trả trễ là 20% mỗi ngày."
@@ -67,14 +67,14 @@ def test_generated_verbose_reference_line_is_removed() -> None:
     answer = (
         "Phí trả trễ là 20% mỗi ngày.\n\n"
         "*Tham khảo: Chính sách thuê — Trả trễ*"
-        "【source citation=\"Chính sách thuê — Trả trễ\"】"
+        '【source citation="Chính sách thuê — Trả trễ"】'
     )
 
     assert service._strip_generated_citations(answer) == "Phí trả trễ là 20% mỗi ngày."
 
 
 def test_standalone_inline_source_tag_is_removed() -> None:
-    answer = "Phí trả trễ là 20% mỗi ngày <source citation=\"Chính sách — Trả trễ\"/>"
+    answer = 'Phí trả trễ là 20% mỗi ngày <source citation="Chính sách — Trả trễ"/>'
 
     assert service._strip_generated_citations(answer) == "Phí trả trễ là 20% mỗi ngày"
 
@@ -82,7 +82,7 @@ def test_standalone_inline_source_tag_is_removed() -> None:
 def test_paired_source_wrapper_is_removed() -> None:
     answer = (
         "Phí trả trễ là 20% mỗi ngày. "
-        "<source citation=\"Chính sách — Trả trễ\">Tham khảo chính sách</source>"
+        '<source citation="Chính sách — Trả trễ">Tham khảo chính sách</source>'
     )
 
     assert service._strip_generated_citations(answer) == "Phí trả trễ là 20% mỗi ngày."
