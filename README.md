@@ -112,11 +112,20 @@ approval, sau đó endpoint quyết định resume đúng checkpoint bằng
 `Command(resume=...)`.
 
 Mỗi message trước tiên được ánh xạ vào một goal có cấu trúc gồm `goalType`,
-`skillName`, constraints, plan và success criteria. `skills.py` chứa các
-business playbook cho policy, tra cứu đơn, availability/schedule, gia hạn,
-reallocation, hủy đơn, unit block, transfer, checkout và refund. Skill là một
-tool allowlist cứng: ReAct chỉ nhìn thấy read tools của skill hiện tại, còn
-write planner chỉ được đề xuất write tool nằm trong đúng skill đó.
+`skillName`, inputs đã trích xuất, constraints, plan và success criteria. Goal
+resolver dùng rule làm fast-path cho yêu cầu rõ ràng; câu diễn đạt tự nhiên chưa
+khớp rule được Groq phân loại bằng structured output và dùng Gemini làm fallback.
+Model chỉ đề xuất loại goal, entity, confidence và write intent. Tool, permission,
+confirmation/approval và success criteria luôn lấy từ policy/skill tin cậy trong
+code. Nếu case đang `WAITING_INPUT`, message mới bổ sung vào goal hiện có thay vì
+phân loại lại từ đầu; goal mơ hồ hoặc write intent chưa rõ sẽ tiếp tục hỏi người
+dùng. Token dùng để phân loại goal được tính vào budget toàn case.
+
+`skills.py` chứa các business playbook cho policy, tra cứu đơn,
+availability/schedule, gia hạn, reallocation, hủy đơn, unit block, transfer,
+checkout và refund. Skill là một tool allowlist cứng: ReAct chỉ nhìn thấy read
+tools của skill hiện tại, còn write planner chỉ được đề xuất write tool nằm trong
+đúng skill đó.
 
 Mọi write action được đóng băng bằng payload hash, có idempotency key xác định,
 được Studio API kiểm tra lại quyền/branch/version và chỉ thành công sau read-back.
@@ -133,10 +142,12 @@ message -> proposal -> fresh read -> frozen action -> confirmation interrupt
 ```
 
 Mỗi case bị giới hạn 6 vòng/tool calls một turn, 24 bước và 30.000 model token
-cho toàn case. Token của write planner cũng được tính vào budget. Khi loop,
-stall, hết budget, vi phạm policy hoặc không xác minh được write outcome, API
-trả `handoff` có reason, tool/evidence đã quan sát, bước tiếp theo và trạng thái
-side effect; write timeout không được tự động retry.
+cho toàn case. Token của write planner cũng được tính vào budget. Với nhánh đọc,
+`goalVerified` chỉ là `true` khi verification đạt và `terminationReason` là
+`GOAL_ACHIEVED`; kết quả thành công không tạo `handoff`. Khi loop, stall, hết
+budget, vi phạm policy hoặc verification thất bại, API trả termination reason
+tương ứng và `handoff` có reason, tool/evidence đã quan sát, bước tiếp theo cùng
+trạng thái side effect. Write timeout không được tự động retry.
 
 ## Docker và CI/CD
 
