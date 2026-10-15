@@ -233,6 +233,18 @@ WRITE_TOOL_POLICIES: Mapping[str, ToolPolicy] = {
     ),
 }
 
+WRITE_GOAL_ARGUMENTS: Mapping[str, tuple[str, ...]] = {
+    "create_unit_block": ("unitId", "plannedStartAt", "plannedDueAt", "reason"),
+    "update_unit_block": ("blockId", "plannedStartAt", "plannedDueAt", "reason"),
+    "cancel_unit_block": ("blockId", "reason"),
+    "extend_rental_order": ("orderId", "newDueAt"),
+    "reallocate_rental_item": ("orderId", "orderItemId", "unitId"),
+    "cancel_rental_order": ("orderId", "reason"),
+    "create_stock_transfer": ("fromBranchId", "toBranchId", "unitIds"),
+    "create_payment_checkout": ("orderId", "amountVnd", "purpose"),
+    "request_refund": ("paymentId", "amountVnd", "reason"),
+}
+
 ALL_TOOL_POLICIES: Mapping[str, ToolPolicy] = {**READ_TOOL_POLICIES, **WRITE_TOOL_POLICIES}
 
 
@@ -260,6 +272,12 @@ class CompletionVerification:
     achieved: bool
     reason: AgentTerminationReason | None = None
     message: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.achieved and self.reason is not None:
+            raise ValueError("Successful completion must not carry a failure reason")
+        if not self.achieved and self.reason is None:
+            raise ValueError("Failed completion requires a termination reason")
 
 
 @dataclass(frozen=True)
@@ -356,6 +374,37 @@ def validate_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> None:
         reason = arguments.get("reason")
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("reason is required")
+
+
+def validate_write_matches_goal(
+    tool_name: str,
+    arguments: dict[str, Any],
+    goal: AgentGoalSpec,
+) -> None:
+    """Reject planner arguments that differ from canonical, user-grounded goal inputs."""
+    for field_name in WRITE_GOAL_ARGUMENTS.get(tool_name, ()):
+        expected = goal.extracted_inputs.get(field_name)
+        if expected in (None, "", [], ()):
+            continue
+        if field_name not in arguments:
+            raise ValueError(f"{field_name} must match the validated goal input")
+        actual = arguments[field_name]
+        if field_name == "unitIds":
+            expected_value: object = (
+                [str(item).lower() for item in expected]
+                if isinstance(expected, (list, tuple))
+                else expected
+            )
+            actual_value: object = (
+                [str(item).lower() for item in actual]
+                if isinstance(actual, list)
+                else actual
+            )
+        else:
+            expected_value = str(expected).lower()
+            actual_value = str(actual).lower()
+        if actual_value != expected_value:
+            raise ValueError(f"{field_name} differs from the validated goal input")
 
 
 @dataclass

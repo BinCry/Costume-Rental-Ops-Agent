@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import Field, field_validator
@@ -106,11 +106,48 @@ class AgentGoalSpec(ApiModel):
     status: str = "active"
     required_tools: tuple[str, ...] = ()
     required_identifiers: tuple[str, ...] = ()
+    extracted_inputs: dict[str, Any] = Field(default_factory=dict)
     missing_inputs: tuple[str, ...] = ()
     success_criteria: tuple[str, ...] = ()
+    resolution_source: Literal["rule", "model", "fallback", "continuation"] = "rule"
+    confidence: float = Field(default=1.0, ge=0, le=1)
     skill_name: str | None = None
     constraints: AgentGoalConstraints = Field(default_factory=AgentGoalConstraints)
     plan: tuple[AgentPlanStep, ...] = ()
+
+
+class GoalEntities(ApiModel):
+    """Typed values that a goal classifier may extract but never execute directly."""
+
+    order_id: UUID | None = None
+    transfer_id: UUID | None = None
+    unit_id: UUID | None = None
+    variant_id: UUID | None = None
+    pickup_branch_id: UUID | None = None
+    planned_start_at: datetime | None = None
+    planned_due_at: datetime | None = None
+    new_due_at: datetime | None = None
+    order_item_id: UUID | None = None
+    payment_id: UUID | None = None
+    block_id: UUID | None = None
+    from_branch_id: UUID | None = None
+    to_branch_id: UUID | None = None
+    unit_ids: tuple[UUID, ...] = ()
+    reason: str | None = Field(default=None, max_length=1_000)
+    amount_vnd: int | None = Field(default=None, gt=0)
+    purpose: str | None = Field(default=None, max_length=500)
+    search: str | None = Field(default=None, max_length=500)
+
+
+class GoalDraft(ApiModel):
+    """Untrusted structured interpretation returned by a language model."""
+
+    goal_type: AgentGoalType
+    confidence: float = Field(ge=0, le=1)
+    summary: str = Field(min_length=1, max_length=2_000)
+    entities: GoalEntities = Field(default_factory=GoalEntities)
+    missing_inputs: tuple[str, ...] = ()
+    explicit_write_intent: bool = False
 
 
 class ActionProposal(ApiModel):

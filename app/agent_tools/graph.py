@@ -62,6 +62,11 @@ _READ_TOOL_ALLOWLIST = frozenset(
 )
 
 
+def _turn_step_limit(goal: AgentGoalSpec, configured_limit: int) -> int:
+    """Apply the tighter of the global and skill-specific step budgets."""
+    return min(configured_limit, goal.constraints.max_steps)
+
+
 async def _ensure_checkpoint_tables(checkpointer: AsyncPostgresSaver) -> None:
     """Create LangGraph-owned checkpoint tables once; business migrations stay separate."""
     global _checkpoint_tables_ready
@@ -153,10 +158,11 @@ async def run_graph_turn(
         return None
     goal = goal or infer_goal(message)
     turn_tool_allowlist = frozenset(goal.constraints.allowed_tools) & _READ_TOOL_ALLOWLIST
+    turn_step_limit = _turn_step_limit(goal, settings.AGENT_MAX_STEPS_PER_TURN)
 
     evidence: list[AgentEvidence] = []
     guard = ExecutionGuard(
-        max_tool_calls=settings.AGENT_MAX_STEPS_PER_TURN,
+        max_tool_calls=turn_step_limit,
         remaining_case_steps=(
             remaining_case_steps
             if remaining_case_steps is not None
@@ -436,7 +442,7 @@ async def run_graph_turn(
                 result = await agent.ainvoke(
                     {"messages": [{"role": "user", "content": message}]},
                     config={
-                        "recursion_limit": settings.AGENT_MAX_STEPS_PER_TURN * 2 + 2,
+                        "recursion_limit": turn_step_limit * 2 + 2,
                         "configurable": {
                             "thread_id": str(case_id),
                             "checkpoint_ns": "agent-read-react",
@@ -478,7 +484,7 @@ async def run_graph_turn(
         if isinstance(content, str):
             answer = content.strip()
     tokens = _token_usage(usage_callback)
-    termination_reason = None
+    termination_reason: AgentTerminationReason | None = None
     if remaining_case_tokens is not None and tokens > remaining_case_tokens:
         termination_reason = AgentTerminationReason.BUDGET_EXHAUSTED
         answer = "Agent đã dừng vì đạt giới hạn token an toàn của case này."
@@ -494,7 +500,9 @@ async def run_graph_turn(
             observations=guard.observations,
         )
         goal_verified = verification.achieved
-        if not verification.achieved:
+        if verification.achieved:
+            termination_reason = AgentTerminationReason.GOAL_ACHIEVED
+        else:
             termination_reason = verification.reason
             answer = verification.message or answer
     logger.info(
@@ -523,6 +531,7 @@ async def run_graph_turn(
                 evidence_count=len(evidence),
             ).as_dict()
             if termination_reason is not None
+            and termination_reason is not AgentTerminationReason.GOAL_ACHIEVED
             else None
         ),
     )

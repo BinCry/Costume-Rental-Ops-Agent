@@ -1,6 +1,7 @@
 """Bounded agent turn runtime and persisted case lifecycle."""
 
 import json
+import logging
 from hashlib import sha256
 from typing import Any
 from uuid import UUID, uuid4
@@ -29,9 +30,13 @@ from app.agent_tools.cases import (
 )
 from app.agent_tools.client import AgentToolClient, ToolInvocationError
 from app.agent_tools.execution import execute_frozen_action, observe_live_tool
-from app.agent_tools.goal import infer_goal, missing_input_question
+from app.agent_tools.goal import infer_goal, missing_input_question, resolve_goal
 from app.agent_tools.graph import GraphTurn, run_graph_turn
-from app.agent_tools.guard import WRITE_TOOL_POLICIES, validate_tool_arguments
+from app.agent_tools.guard import (
+    WRITE_TOOL_POLICIES,
+    validate_tool_arguments,
+    validate_write_matches_goal,
+)
 from app.agent_tools.models import (
     ActionProposal,
     AgentCaseState,
@@ -56,11 +61,19 @@ from app.models import (
     PendingConfirmation,
 )
 
+logger = logging.getLogger(__name__)
+_MODEL_CALL_TOKEN_RESERVE = 4_096
+
 
 def _run_timeout_seconds() -> float:
-    """Give the case claim a little room beyond the graph and one tool call."""
+    """Cover provider fallback, graph/planner work, and one tool call."""
     settings = get_settings()
-    return settings.AGENT_MAX_TURN_SECONDS + settings.AGENT_TOOL_TIMEOUT_SECONDS + 10
+    return (
+        4 * settings.LLM_TIMEOUT_SECONDS
+        + settings.AGENT_MAX_TURN_SECONDS
+        + settings.AGENT_TOOL_TIMEOUT_SECONDS
+        + 30
+    )
 
 
 async def answer_agent_message(
@@ -90,7 +103,6 @@ async def answer_agent_message(
             "This agent case cannot accept another message",
         )
     resolved_case_id = UUID(case["id"])
-    goal = infer_goal(message)
     run_id = None
     settings = get_settings()
     if "version" in case:
@@ -100,19 +112,51 @@ async def answer_agent_message(
             raise AppError(
                 409, "CASE_BUSY", "An agent request is already running for this case"
             ) from error
-    await transition_case(resolved_case_id, actor_id, AgentCaseState.ANALYZING)
-    if "version" in case:
-        await set_goal(resolved_case_id, actor_id, goal)
-
     previous_tokens = 0
     previous_steps = 0
     if "version" in case:
         previous_tokens, previous_steps = await get_case_budget_usage(resolved_case_id)
 
+    try:
+        previous_goal = None
+        if current is AgentCaseState.WAITING_INPUT and isinstance(case.get("goal"), dict):
+            previous_goal = AgentGoalSpec.model_validate(case["goal"])
+        if previous_tokens >= settings.AGENT_MAX_TOKENS_PER_CASE:
+            goal = previous_goal or infer_goal(message)
+            goal_tokens = 0
+        else:
+            resolution = await resolve_goal(
+                message,
+                previous_goal,
+                allow_model=(
+                    settings.AGENT_MAX_TOKENS_PER_CASE - previous_tokens
+                    >= _MODEL_CALL_TOKEN_RESERVE
+                ),
+            )
+            goal = resolution.goal
+            goal_tokens = resolution.token_usage
+    except Exception as error:
+        logger.exception(
+            "Agent goal resolution failed",
+            extra={"case_id": str(resolved_case_id), "error_type": type(error).__name__},
+        )
+        if run_id is not None:
+            await mark_run(run_id, AgentRunStatus.FAILED, "GOAL_RESOLUTION_FAILED")
+        raise AppError(
+            503,
+            "GOAL_RESOLUTION_FAILED",
+            "Could not safely understand the agent request",
+        ) from error
+
+    await transition_case(resolved_case_id, actor_id, AgentCaseState.ANALYZING)
+    if "version" in case:
+        await set_goal(resolved_case_id, actor_id, goal)
+
     write_goal = any(
         tool_name in WRITE_TOOL_POLICIES for tool_name in goal.constraints.allowed_tools
     )
-    if "version" in case and write_goal:
+    clarification = missing_input_question(goal)
+    if "version" in case and write_goal and clarification is None:
         return await _plan_write_confirmation(
             actor=actor,
             case_id=resolved_case_id,
@@ -121,13 +165,15 @@ async def answer_agent_message(
             goal=goal,
             previous_tokens=previous_tokens,
             previous_steps=previous_steps,
+            goal_resolution_tokens=goal_tokens,
         )
 
     graph_turn = None
     if "version" in case:
         remaining_steps = settings.AGENT_MAX_STEPS_PER_CASE - previous_steps
-        remaining_tokens = settings.AGENT_MAX_TOKENS_PER_CASE - previous_tokens
-        clarification = missing_input_question(goal)
+        remaining_tokens = (
+            settings.AGENT_MAX_TOKENS_PER_CASE - previous_tokens - goal_tokens
+        )
         if clarification is not None:
             graph_turn = GraphTurn(
                 answer=clarification,
@@ -159,9 +205,18 @@ async def answer_agent_message(
                 goal=goal,
             )
     knowledge = None if graph_turn is not None else await answer_knowledge(actor, message, top_k=6)
-    rule_termination = graph_turn.termination_reason if graph_turn is not None else None
+    graph_termination = graph_turn.termination_reason if graph_turn is not None else None
+    rule_termination = (
+        graph_termination
+        if graph_termination is not AgentTerminationReason.GOAL_ACHIEVED
+        else None
+    )
     answered = (
-        (graph_turn is not None and rule_termination is None and graph_turn.goal_verified)
+        (
+            graph_turn is not None
+            and graph_termination is AgentTerminationReason.GOAL_ACHIEVED
+            and graph_turn.goal_verified
+        )
         or knowledge is not None
         and knowledge.outcome == "answered"
     )
@@ -255,7 +310,7 @@ async def answer_agent_message(
                 {
                     "reason": rule_termination.value,
                     "toolCalls": graph_turn.tool_calls if graph_turn else 0,
-                    "tokens": graph_turn.token_usage if graph_turn else 0,
+                    "tokens": goal_tokens + (graph_turn.token_usage if graph_turn else 0),
                     "handoff": graph_turn.handoff if graph_turn else None,
                 },
                 ensure_ascii=False,
@@ -278,10 +333,10 @@ async def answer_agent_message(
         await mark_run(
             run_id,
             run_status,
-            token_usage=graph_turn.token_usage if graph_turn is not None else 0,
+            token_usage=goal_tokens + (graph_turn.token_usage if graph_turn is not None else 0),
             step_count=max(1, graph_turn.tool_calls) if graph_turn is not None else 1,
         )
-    final_reason = rule_termination or (
+    final_reason = graph_termination or (
         AgentTerminationReason.GOAL_ACHIEVED
         if answered
         else AgentTerminationReason.INSUFFICIENT_DATA
@@ -294,7 +349,9 @@ async def answer_agent_message(
         run_status=run_status.value,
         goal=_public_goal(goal.model_copy(update={"status": goal_status}).model_dump()),
         steps_used=(previous_steps + max(1, graph_turn.tool_calls)) if graph_turn else 1,
-        tokens_used=previous_tokens + (graph_turn.token_usage if graph_turn else 0),
+        tokens_used=previous_tokens
+        + goal_tokens
+        + (graph_turn.token_usage if graph_turn else 0),
         termination_reason=final_reason.value,
         pending_input=answer if state is AgentCaseState.WAITING_INPUT else None,
         handoff=(
@@ -325,13 +382,15 @@ async def _plan_write_confirmation(
     goal: AgentGoalSpec,
     previous_tokens: int,
     previous_steps: int,
+    goal_resolution_tokens: int = 0,
 ) -> AgentCaseResponse:
     """Freeze an LLM proposal before it can cross the confirmation boundary."""
     actor_id = UUID(actor.user_id)
     settings = get_settings()
     if (
         previous_steps >= settings.AGENT_MAX_STEPS_PER_CASE
-        or previous_tokens >= settings.AGENT_MAX_TOKENS_PER_CASE
+        or previous_tokens + goal_resolution_tokens
+        > settings.AGENT_MAX_TOKENS_PER_CASE - _MODEL_CALL_TOKEN_RESERVE
     ):
         answer = "Agent đã đạt giới hạn an toàn của case; cần người vận hành tiếp nhận."
         await transition_case(
@@ -342,13 +401,18 @@ async def _plan_write_confirmation(
         )
         await append_turn(case_id, message, answer, [], "write_planning", "BLOCKED", answer)
         if run_id is not None:
-            await mark_run(run_id, AgentRunStatus.COMPLETED)
+            await mark_run(
+                run_id,
+                AgentRunStatus.COMPLETED,
+                token_usage=goal_resolution_tokens,
+                step_count=1,
+            )
         return await read_agent_case(actor, case_id)
-    planning_tokens = 0
+    planning_tokens = goal_resolution_tokens
     try:
         planning = await propose_write_action(message, goal)
         proposal = planning.proposal
-        planning_tokens = planning.token_usage
+        planning_tokens += planning.token_usage
     except Exception:
         proposal = None
     if previous_tokens + planning_tokens > settings.AGENT_MAX_TOKENS_PER_CASE:
@@ -391,6 +455,7 @@ async def _plan_write_confirmation(
         if policy is None:
             raise ValueError("tool is not in the write allowlist")
         validate_tool_arguments(proposal.tool_name, proposal.arguments)
+        validate_write_matches_goal(proposal.tool_name, proposal.arguments, goal)
         if policy.requires_expected_version and proposal.expected_version is None:
             raise ValueError("expectedVersion must come from a fresh read observation")
     except ValueError as error:

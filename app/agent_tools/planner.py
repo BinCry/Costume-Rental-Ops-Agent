@@ -5,6 +5,7 @@ untrusted proposal which runtime canonicalizes and freezes before asking for a
 human confirmation.
 """
 
+import json
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -143,7 +144,16 @@ async def propose_write_action(message: str, goal: AgentGoalSpec) -> PlanningRes
                 + plan
             )
         ),
-        HumanMessage(content=message),
+        HumanMessage(
+            content=json.dumps(
+                {
+                    "request": message,
+                    "validatedInputs": goal.extracted_inputs,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+        ),
     ]
     last_error: Exception | None = None
     consumed_tokens = 0
