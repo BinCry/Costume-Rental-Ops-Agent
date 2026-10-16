@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
+from app.agent_tools.guard import WRITE_GOAL_ARGUMENTS
 from app.agent_tools.models import ActionProposal, AgentGoalSpec
 from app.config import get_settings
 
@@ -115,15 +116,49 @@ def _models() -> tuple[ChatOpenAI, ...]:
     return tuple(models)
 
 
+def _deterministic_proposal(
+    goal: AgentGoalSpec,
+    allowed_write_tools: tuple[str, ...],
+) -> ActionProposal | None:
+    """Build an action from trusted skill inputs when the target is unambiguous."""
+    if goal.missing_inputs:
+        return None
+    candidates = allowed_write_tools
+    block_action = goal.extracted_inputs.get("blockAction")
+    if block_action in {"create", "update", "cancel"}:
+        selected = f"{block_action}_unit_block"
+        candidates = (selected,) if selected in allowed_write_tools else ()
+    if len(candidates) != 1:
+        return None
+
+    tool_name = candidates[0]
+    contract = WRITE_GOAL_ARGUMENTS.get(tool_name)
+    if contract is None:
+        return None
+    arguments = {
+        field_name: goal.extracted_inputs[field_name]
+        for field_name in contract
+        if goal.extracted_inputs.get(field_name) not in (None, "", [], ())
+    }
+    return ActionProposal(
+        tool_name=tool_name,
+        arguments=arguments,
+        summary=f"Thực hiện {tool_name} với dữ liệu đã được xác thực",
+    )
+
+
 async def propose_write_action(message: str, goal: AgentGoalSpec) -> PlanningResult:
     """Return one structured proposal, or ``None`` when safe planning is impossible."""
-    models = _models()
-    if not models:
-        return PlanningResult(None)
     allowed_write_tools = tuple(
         tool_name for tool_name in goal.constraints.allowed_tools if tool_name in WRITE_TOOL_NAMES
     )
     if not allowed_write_tools:
+        return PlanningResult(None)
+    deterministic = _deterministic_proposal(goal, allowed_write_tools)
+    if deterministic is not None:
+        return PlanningResult(deterministic)
+    models = _models()
+    if not models:
         return PlanningResult(None)
     plan = "\n".join(
         f"{step.order}. {step.action}; verify: {step.verification}" for step in goal.plan
