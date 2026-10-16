@@ -351,7 +351,14 @@ def _continuation_labeled_text_inputs(
 ) -> dict[str, Any]:
     """Extract explicitly labelled free-text answers from a follow-up message."""
     labels = {
-        "reason": ("lý do", "ly do", "reason"),
+        "reason": (
+            "lý do hủy",
+            "ly do huy",
+            "cancellation reason",
+            "lý do",
+            "ly do",
+            "reason",
+        ),
         "purpose": ("mục đích", "muc dich", "purpose"),
         "search": ("tìm kiếm", "tim kiem", "search"),
     }

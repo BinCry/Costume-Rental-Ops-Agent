@@ -503,7 +503,7 @@ async def test_labeled_reason_completes_cancellation_continuation(
 
     monkeypatch.setattr(goal_module, "_classify_goal", no_classification)
     resolution = await resolve_goal(
-        "Lý do: kiểm thử production có kiểm soát.",
+        "Lý do hủy: kiểm thử production có kiểm soát.",
         previous,
     )
 
