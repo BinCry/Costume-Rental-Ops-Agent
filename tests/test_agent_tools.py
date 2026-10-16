@@ -492,6 +492,27 @@ async def test_model_cannot_replace_validated_continuation_target(
 
 
 @pytest.mark.asyncio
+async def test_labeled_reason_completes_cancellation_continuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order_id = uuid4()
+    previous = infer_goal(f"Hủy đơn thuê {order_id}")
+
+    async def no_classification(*_: object) -> tuple[None, int]:
+        return None, 0
+
+    monkeypatch.setattr(goal_module, "_classify_goal", no_classification)
+    resolution = await resolve_goal(
+        "Lý do: kiểm thử production có kiểm soát.",
+        previous,
+    )
+
+    assert resolution.goal.extracted_inputs["orderId"] == str(order_id)
+    assert resolution.goal.extracted_inputs["reason"] == "kiểm thử production có kiểm soát."
+    assert resolution.goal.missing_inputs == ()
+
+
+@pytest.mark.asyncio
 async def test_model_cannot_reuse_one_uuid_for_multiple_business_roles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

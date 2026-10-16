@@ -345,6 +345,31 @@ def _continuation_rule_inputs(
     return values
 
 
+def _continuation_labeled_text_inputs(
+    message: str,
+    missing_inputs: tuple[str, ...],
+) -> dict[str, Any]:
+    """Extract explicitly labelled free-text answers from a follow-up message."""
+    labels = {
+        "reason": ("lý do", "ly do", "reason"),
+        "purpose": ("mục đích", "muc dich", "purpose"),
+        "search": ("tìm kiếm", "tim kiem", "search"),
+    }
+    for field_name in missing_inputs:
+        aliases = labels.get(field_name)
+        if aliases is None:
+            continue
+        label_pattern = "|".join(re.escape(alias) for alias in aliases)
+        match = re.fullmatch(
+            rf"\s*(?:{label_pattern})\s*[:\-]\s*(\S(?:.*\S)?)\s*",
+            message,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            return {field_name: match.group(1)}
+    return {}
+
+
 def _identifiers_from_inputs(values: dict[str, Any]) -> tuple[str, ...]:
     serialized = json.dumps(values, default=str)
     return tuple(dict.fromkeys(match.lower() for match in _UUID_PATTERN.findall(serialized)))
@@ -658,6 +683,7 @@ def _merge_continuation(
             values,
         )
     )
+    values.update(_continuation_labeled_text_inputs(message, previous_goal.missing_inputs))
     if draft is not None and draft.goal_type in {
         previous_goal.goal_type,
         AgentGoalType.GENERAL_ASSISTANCE,
