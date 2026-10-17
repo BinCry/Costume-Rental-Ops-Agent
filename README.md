@@ -1,5 +1,16 @@
 # Costume Rental Ops Agent
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/LangChain-1C3334?style=flat-square&logo=chainlink&logoColor=white" alt="LangChain">
+  <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL">
+  <img src="https://img.shields.io/badge/pgvector-336791?style=flat-square&logo=postgresql&logoColor=white" alt="pgvector">
+  <img src="https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
+  <img src="https://img.shields.io/badge/Coolify-6A0DAD?style=flat-square&logo=coolify&logoColor=white" alt="Coolify">
+  <img src="https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-2088FF?style=flat-square&logo=githubactions&logoColor=white" alt="GitHub Actions">
+</p>
+
 Service Python độc lập bổ sung Ops Agent và RAG cho [Costume Rental Studio](https://github.com/BinCry/Costume-Rental-Studio). Repo này chứa API AI, knowledge base, ingestion và evaluation; giao diện người dùng tiếp tục thuộc ứng dụng Studio chính.
 
 ## Tài liệu chính
