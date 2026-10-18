@@ -1,12 +1,13 @@
 # Tool và tích hợp — Costume Rental Ops Agent
 
-**Phiên bản:** 0.1
-**Trạng thái:** inventory và contract đề xuất
-**Ngày:** 11/10/2026
+**Phiên bản:** 0.2
+**Trạng thái:** inventory đề xuất; xem ghi chú hiện trạng bên dưới để phân biệt với contract đã chạy
+**Ngày cập nhật:** 18/10/2026
+**Người cập nhật:** BinCry <bincry2006@gmail.com>
 
 ## 1. Tổng quan và ranh giới
 
-Tài liệu kiểm kê API hiện có trong Studio gốc và đề xuất lớp tool cho Ops Agent. Các endpoint liệt kê không mặc nhiên là contract đã được duyệt cho Agent. Trước khi tích hợp live phải xác nhận authentication, scope, field tối thiểu, freshness, rate limit, PII và chủ sở hữu API.
+Tài liệu kiểm kê API Studio và đề xuất lớp tool cho Ops Agent. Các tên tool ở mục 3–4 là **đề xuất thiết kế**, không phải danh sách runtime đã đăng ký. Contract thực tế tại mốc 18/10/2026 là [`agent-tools/v1`](https://github.com/BinCry/Costume-Rental-Studio/blob/main/apps/api/src/modules/agent-tools/agent-tools.schema.ts), với [10 tool đọc và 11 tool ghi trong registry](https://github.com/BinCry/Costume-Rental-Studio/blob/main/apps/api/src/modules/agent-tools/agent-tools.registry.ts). Studio API chặn **toàn bộ tool ghi** bằng `AGENT_WRITE_TOOLS_NOT_READY`; route xác nhận/duyệt hiện có không gỡ chặn này. Trước khi thêm tool mới phải chốt quyền, chi nhánh, trường tối thiểu, freshness, lỗi, PII và test contract hai repo.
 
 Ops Agent không gọi database trực tiếp. Tool backend đóng vai trò adapter giữa model/orchestrator và API được phép.
 

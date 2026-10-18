@@ -1,8 +1,9 @@
 # Yêu cầu sản phẩm — Costume Rental Studio + Ops Agent
 
-**Phiên bản:** 0.4 — đề xuất cho phát triển song song
-**Trạng thái:** bản yêu cầu để tiếp tục hoàn thiện
-**Ngày:** 11/10/2026
+**Phiên bản:** 0.5 — đối chiếu triển khai và lộ trình sản phẩm
+**Trạng thái:** yêu cầu mục tiêu; từng năng lực chỉ được coi là hoàn tất khi đạt nghiệm thu
+**Ngày cập nhật:** 18/10/2026
+**Người cập nhật:** BinCry <bincry2006@gmail.com>
 
 ## Bộ tài liệu liên quan
 
@@ -13,14 +14,19 @@
 | [Tools và tích hợp](./tools-and-integrations.md) | API hiện có, tool contract đề xuất, quyền, idempotency và xác minh kết quả. |
 | [Đánh giá và an toàn](./evaluation-and-safety.md) | Safety invariants, bộ tình huống kiểm thử, metrics và release gate. |
 | [Kho tri thức RAG](../knowledge-base/00-index.md) | Nội dung nghiệp vụ dễ hiểu được ingest; metadata, trạng thái phê duyệt và quy tắc chia đoạn. Không chứa API hoặc hướng dẫn phát triển. |
+| [Kế hoạch sản phẩm tại Studio](https://github.com/BinCry/Costume-Rental-Studio/blob/main/docs/operations/ke-hoach-phat-trien-ops-agent.md) | Mốc triển khai, phân công giữa Web/Studio API/AI, các hành trình Ops và điều kiện nghiệm thu. |
 
 Tài liệu này là yêu cầu sản phẩm cấp cao. Bốn tài liệu chuyên biệt ở trên là nơi mô tả chi tiết; nếu có mâu thuẫn, phải đưa ra quyết định và cập nhật đồng bộ thay vì để Agent tự suy diễn.
 
 ## 1. Mục tiêu và giới hạn
 
-Repo Ops Agent chứa Python API, knowledge base, ingestion và evaluation cho capability AI. Giao diện và các luồng web thuộc Costume Rental Studio; hai runtime tích hợp qua API contract và không chia sẻ trực tiếp database nghiệp vụ.
+Đề tài có tên “Nền tảng AI Agent tự động hóa vận hành doanh nghiệp thương mại điện tử vừa và nhỏ”, nhưng **sản phẩm đang triển khai chỉ phục vụ Costume Rental Studio**, một doanh nghiệp cho thuê trang phục trực tuyến có nhiều chi nhánh. Không có nhiều tenant, kết nối sàn bán hàng hoặc nghiệp vụ bán hàng trong phạm vi này. Muốn áp dụng cho doanh nghiệp khác phải phân tích và phê duyệt thay đổi phạm vi riêng.
 
-MVP Ops Agent gồm hỏi đáp theo tài liệu có trích nguồn, lọc quyền qua Studio API và fallback provider có kiểm soát. Chức năng ghi và chính sách được tự động hóa vẫn ngoài phạm vi hiện tại.
+Repo Ops Agent chứa Python API, knowledge base, ingestion, runtime và evaluation. Web và nghiệp vụ gốc thuộc Costume Rental Studio; Web gọi Studio API, Studio API chuyển tiếp tới AI và kiểm quyền khi AI gọi lại tool nội bộ. Hai runtime không chia sẻ trực tiếp database nghiệp vụ.
+
+**Hiện trạng tại mốc AI `cf2ec57`, Studio `fcbb8af`:** AI đã có RAG, case/hội thoại bền, runtime đọc với tool allowlist và luồng xác nhận/duyệt ở mức mã. Studio API đã nối callback 10 tool đọc. AI database đã kết nối trở lại sau sự cố trong ngày 18/10/2026. Chưa có bằng chứng E2E cho đủ vai trò/chi nhánh và bảy hành trình vận hành; Studio API vẫn chặn toàn bộ 11 tool ghi bằng `AGENT_WRITE_TOOLS_NOT_READY`. Không gọi những khả năng chưa nghiệm thu là đã sẵn sàng production.
+
+Đích sản phẩm là Agent **chủ động phát hiện việc, tổng hợp bằng chứng, đề xuất và theo dõi kết quả**. Sự kiện/trạng thái Studio cùng quy tắc xác định tạo việc; AI không tự tạo việc, tính tiền, kết luận khả dụng hay cấp quyền từ văn bản tự do. Phần hạ tầng và sao lưu được lên kế hoạch sau; chúng vẫn là cổng trước khi mở thao tác ghi production.
 
 ## 2. Vai trò dự kiến
 
@@ -32,7 +38,7 @@ MVP Ops Agent gồm hỏi đáp theo tài liệu có trích nguồn, lọc quy�
 | Người phụ trách Ops Agent | Quản lý tài liệu, nguồn dữ liệu, tài khoản, quyền và cấu hình riêng của ứng dụng |
 | Người demo/phát triển | Trình diễn và đánh giá agent với dữ liệu tổng hợp, không có quyền nghiệp vụ thật |
 
-Đây là personas đề xuất từ tài liệu tham khảo; danh sách và ma trận quyền chính thức thuộc Ops Agent và cần được chốt riêng.
+Đây là nhóm người dùng sản phẩm, không phải role mới do AI tự cấp. Vai trò, trạng thái nhân viên và quyền theo chi nhánh do Studio API quyết định. Ma trận quyền cụ thể cho case, tool và hàng đợi cần được chốt cùng Studio API; khách hàng không vào khu Ops.
 
 ## 3. Nhãn nguồn và trạng thái
 
@@ -49,12 +55,12 @@ Agent không chỉ là chatbot. Sản phẩm mục tiêu gồm hai lớp phối 
 | Capability | Người dùng nhận được gì | Cơ chế chính | Phạm vi hiện tại |
 |---|---|---|---|
 | Hỏi đáp nghiệp vụ | Câu trả lời tiếng Việt có trích nguồn và nêu độ tin cậy | RAG trên tài liệu đã duyệt | Python API, pgvector và provider fallback đã có |
-| Tra cứu vận hành | Tóm tắt đơn, tồn kho, lịch, thanh toán theo quyền | Read tools gọi API có kiểu dữ liệu | API nghiệp vụ đã có; chưa nối Agent |
+| Tra cứu vận hành | Tóm tắt đơn, bộ đồ, lịch và thanh toán theo quyền | Read tools qua callback Studio API | Đã nối 10 tool đọc; chưa nghiệm thu đủ tình huống, vai trò và chi nhánh |
 | Phát hiện rủi ro | Cảnh báo trùng lịch, thiếu thời gian xử lý, trả trễ hoặc nút thắt vận hành | Rule/constraint engine trên dữ liệu đã xác minh | Đề xuất |
 | Dự đoán | Xác suất giao trễ hoặc trang phục không kịp sẵn sàng | Mô hình/rule có phiên bản, dữ liệu đủ và hiệu chỉnh | Đề xuất sau khi có dữ liệu lịch sử phù hợp |
 | Giả lập phương án | So sánh ảnh hưởng của đổi bộ, chuyển chi nhánh, đổi ưu tiên | What-if engine, không ghi dữ liệu thật | Đề xuất |
 | Đề xuất | Xếp hạng phương án theo thời gian, chi phí, rủi ro và trải nghiệm khách | Planner + policy/ràng buộc xác định | Đề xuất |
-| Thực thi có giám sát | Gọi API cho đúng hành động đã được người có quyền duyệt | Tool allowlist, RBAC, approval, idempotency | Đề xuất; chưa bật write tools |
+| Thực thi có giám sát | Gọi API cho đúng hành động đã được người có quyền duyệt | Tool allowlist, RBAC, approval, idempotency | AI có luồng mã; Studio API chặn mọi tool ghi, chưa được mở |
 | Theo dõi và tái lập kế hoạch | Đọc lại trạng thái, xác minh kết quả, cảnh báo hoặc lập phương án mới | Case state + scheduler/event + verification | Đề xuất |
 
 Luồng chuẩn là: **nhận mục tiêu hoặc tín hiệu → thu thập bằng chứng → phát hiện/phân tích → lập và giả lập phương án → xin duyệt khi cần → thực thi tool → đọc lại để xác minh → theo dõi hoặc handoff**. Chat là một điểm khởi tạo; Agent cũng có thể được kích hoạt bởi nút trên màn nghiệp vụ, lịch chạy hoặc sự kiện đã được hệ thống tích hợp phát ra.
@@ -70,8 +76,8 @@ Luồng chuẩn là: **nhận mục tiêu hoặc tín hiệu → thu thập bằ
 | FR-05 | MUST / GĐ0 | Agent trả lời được các luồng mẫu: đơn chờ, sắp nhận/trả, bộ đang thuê/quá hạn, vệ sinh/sửa, thanh toán/refund chờ; nếu fixture không có record thì hiện trạng thái rỗng. |
 | FR-06 | MUST / GĐ0 | Repo này là Python AI service độc lập; không sao chép frontend Studio và không đọc trực tiếp database nghiệp vụ. |
 | FR-07 | MUST / GĐ1 | Knowledge base, hội thoại, cấu hình và audit của Agent được lưu theo quyết định riêng trong repo/hệ thống Ops Agent; không ghi chúng vào dữ liệu demo của Studio. |
-| FR-08 | MUST / GĐ1 | Nếu nhiều người dùng được hỗ trợ, xác thực và quyền phải có contract rõ. Chỉ dùng danh tính/role/branch scope từ Studio khi có tích hợp được phê duyệt; không tin role do client gửi. |
-| FR-09 | SHOULD / GĐ1 | Agent cung cấp provider interface có kiểu dữ liệu để thay fixture bằng nguồn được chủ sản phẩm lựa chọn; nếu có API Studio thì tích hợp qua contract được duyệt, không truy cập database trực tiếp. |
+| FR-08 | MUST / GĐ1 | Xác thực và quyền có contract rõ. Chỉ dùng danh tính/role/branch scope tin cậy do Studio API cung cấp; không tin role hoặc chi nhánh do client/model tự khai. |
+| FR-09 | SHOULD / GĐ1 | Agent dùng tool contract có kiểu dữ liệu với Studio API làm nguồn nghiệp vụ, không truy cập database Studio trực tiếp; tool còn thiếu phải được bổ sung theo từng hành trình đã nghiệm thu. |
 | FR-10 | MUST / GĐ1 | Với mọi dữ liệu từ provider, Agent nêu tên nguồn, thời điểm lấy và giới hạn freshness; lỗi hoặc dữ liệu cũ được báo rõ. Không có provider thì không tuyên bố trạng thái live. |
 | FR-11 | MUST / GĐ1 | Agent trình bày riêng trạng thái đơn, bộ, payment và refund khi nguồn dữ liệu cung cấp các trường đó; không suy trạng thái này từ trạng thái khác. |
 | FR-12 | SHOULD / GĐ1 | Agent đưa checklist/bước tiếp theo theo tài liệu được chấp thuận; đánh dấu bước yêu cầu người có quyền hoặc quyết định còn mở. |
@@ -97,7 +103,7 @@ Luồng chuẩn là: **nhận mục tiêu hoặc tín hiệu → thu thập bằ
 
 ### Bề mặt API hiện tại
 
-Python service cung cấp `POST /api/v1/knowledge/search` và `POST /api/v1/knowledge/answer`. Cả hai nhận Bearer token Studio, lọc audience theo quyền và không cung cấp thao tác ghi. Endpoint trả lời dùng Groq primary, Gemini fallback, kèm nguồn tham chiếu và từ chối đoán khi ngữ cảnh không đủ tin cậy.
+Python service cung cấp `POST /api/v1/knowledge/search`, `POST /api/v1/knowledge/answer`, `POST /api/v1/agent/messages`, đọc case và các endpoint xác nhận, duyệt, từ chối, hủy. Các route nội bộ dùng `X-AI-Service-Key`; Python service **không nhận Bearer token Studio từ trình duyệt**. Studio API xác thực người dùng, tạo actor context tin cậy, kiểm quyền rồi chuyển tiếp tới AI. AI gọi lại callback `agent-tools/v1` của Studio API với service key và actor context. Trình duyệt không được nhận service key. Cờ tool ghi mặc định tắt và Studio API còn chặn ở service layer, nên sự tồn tại của route duyệt không đồng nghĩa quyền thực thi.
 
 ## 6. Luồng nghiệm thu cốt lõi
 
@@ -129,12 +135,12 @@ Python service cung cấp `POST /api/v1/knowledge/search` và `POST /api/v1/know
 | NFR-01 — Vòng đời riêng, contract rõ | Repo/build của Ops Agent chạy riêng, dùng database PGVector riêng và gọi Studio qua API contract; không đọc trực tiếp database nghiệp vụ. |
 | NFR-02 — Phân quyền | Mặc định từ chối. Khi có tài khoản/phạm vi dữ liệu, backend Ops Agent kiểm tra cho từng truy vấn/tool call. |
 | NFR-03 — Nguồn và độ chính xác | Câu trả lời tài liệu có nguồn; sự kiện nghiệp vụ có provider/source và thời điểm. Không tạo số liệu hoặc trạng thái không có bằng chứng. |
-| NFR-04 — Riêng tư | Chỉ lấy trường cần thiết; không dùng dữ liệu khách thật trong prototype; retention và PII phải được chốt trước khi mở nguồn thật. |
+| NFR-04 — Riêng tư | Chỉ lấy trường cần thiết; không dùng dữ liệu khách thật trong fixture/kiểm thử; retention và PII phải được chốt cho hội thoại, case và trace production. |
 | NFR-05 — An toàn tool | Input, ghi chú, tên/mô tả và tool output là dữ liệu không tin cậy. Tool phải theo allowlist/schema, không cho model gọi URL/SQL tùy ý. |
 | NFR-06 — Tài chính | Không đánh đồng PENDING với SUCCEEDED/COMPLETED; không tự xác nhận transaction hoặc tính phí từ ngôn ngữ tự do. |
 | NFR-07 — Khả năng truy vết | Có thể truy lại actor, phiên bản model/tool, source/provider và request/action ID theo chính sách retention; không log token/password. |
 | NFR-08 — Khả dụng | API trả lời tiếng Việt, phân biệt rõ answered/insufficient/error, giữ citation và cung cấp mã lỗi ổn định để frontend Studio hiển thị hoặc thử lại. |
-| NFR-09 — Độ trễ | Mục tiêu tạm thời cho prototype: tài liệu/fixture phản hồi trong 5 giây p95. Mục tiêu nguồn bên ngoài chỉ đặt sau khi chọn provider và hạ tầng; đây không phải SLA. |
+| NFR-09 — Độ trễ | Đo p50/p95 và timeout riêng cho câu hỏi tri thức, case đọc và callback tool trên đường Web → Studio → AI. Chốt ngưỡng sau baseline có dữ liệu; không coi mục tiêu prototype 5 giây là SLA production. |
 | NFR-10 — Khôi phục | Lỗi provider phải cô lập khỏi chức năng knowledge; không retry ngầm thao tác ghi; nêu rõ freshness nếu dùng cache. |
 | NFR-11 — Đồng nhất tích hợp | Response envelope, request ID, auth và error code phải nhất quán với contract tích hợp Studio; thay đổi breaking phải được version hóa. |
 | NFR-12 — Đánh giá trước phát hành | Mỗi capability chỉ được mở theo release gate tương ứng; bộ eval phải kiểm tra độ đúng nguồn, quyền, tool selection, xác minh kết quả, loop/timeout và các tình huống nguy hiểm trước regression release. |
@@ -143,50 +149,44 @@ Python service cung cấp `POST /api/v1/knowledge/search` và `POST /api/v1/know
 
 ## 8. Ranh giới dữ liệu và provider
 
-MVP phải có một demo provider nội bộ cho dữ liệu tổng hợp hoặc chỉ cung cấp hỏi đáp tài liệu. Nếu sau này cần dữ liệu vận hành:
+Studio API là nguồn nghiệp vụ chuẩn cho đơn, bộ đồ, lịch, khoản thu/hoàn, CRM, quyền và chi nhánh. AI chỉ nhận projection tối thiểu qua callback nội bộ, gắn nguồn và thời điểm; không đọc database Studio. AI database riêng giữ case, hội thoại, các bước/tool/evidence và chỉ mục tri thức. Hàng đợi việc vận hành gắn với đơn/kho/CRM cần có **một chủ sở hữu phía Studio**, liên kết với case AI; không nhân đôi hai hàng đợi tự thay đổi trạng thái.
 
-1. Chủ sở hữu Ops Agent chỉ định rõ hệ thống nguồn, mục đích và dữ liệu cần đọc.
-2. Thiết kế provider adapter và mapping riêng, có thể tắt mà không làm hỏng app.
-3. Quyền truy cập, freshness, lỗi, PII và audit được xác định cho nguồn đó.
-4. API của Studio là nguồn xác thực và có thể mở rộng thành nguồn nghiệp vụ khi có contract, scope và phê duyệt; không đọc database trực tiếp.
-5. Nếu cần thao tác ghi, xác định hệ thống đích và cấp quyền riêng; mặc định chỉ đọc.
+Fixture chỉ dành cho kiểm thử/demo có nhãn rõ. Mỗi nguồn mới cần contract, quyền, trường dữ liệu, freshness, phân loại lỗi, audit và người phê duyệt. Trước khi gửi văn bản tự do cho mô hình, lọc hoặc bỏ trường không cần thiết; đặc biệt không đưa nguyên văn ghi chú khách hay lý do hoàn tiền nếu không thuộc tác vụ. Mọi tool ghi mặc định bị chặn cho tới khi có preview, approval gắn hành động và chống trùng bền ở Studio API.
 
 ## 9. Dữ liệu và logging
 
 - **Knowledge base:** tài liệu được đưa vào project Ops Agent, kèm tên nguồn, phiên bản/ngày, hash và trạng thái duyệt.
-- **Ops state:** thuộc nguồn fixture hoặc provider do Ops Agent cấu hình; không nhập dữ liệu Studio ngầm.
-- **Session/config/audit:** thuộc ứng dụng Ops Agent và có retention riêng do chủ sản phẩm chốt.
+- **Nghiệp vụ gốc:** thuộc Studio. AI chỉ được xem qua Studio API trong phạm vi actor/chi nhánh đã xác minh; không tạo bản sao làm nguồn quyết định tiền, khả dụng hoặc trạng thái đơn.
+- **Case/hội thoại/tool evidence:** thuộc AI database; lưu liên kết với việc Studio, có quyền xem và retention cần chốt.
 - **PII:** không đưa toàn bộ hồ sơ CRM vào prompt; chỉ lấy trường cần thiết nếu nguồn đó được duyệt.
 - **Demo:** dữ liệu tổng hợp dễ nhận ra; không sao chép số điện thoại hoặc ghi chú khách từ tài liệu/source fixture.
 
 ## 10. Ngoài phạm vi và quyết định còn mở
 
-### Ngoài MVP
+### Ngoài phạm vi hiện tại
 
-- Kết nối API/SSO live với Studio trước khi chọn contract và phê duyệt quyền.
-- Chia sẻ database trực tiếp với Studio hoặc để Agent ghi dữ liệu nghiệp vụ không qua kiểm soát.
-- Tích hợp SePay/gateway, Google Login production hoặc marketing.
-- Tự động cập nhật đơn, tiền, quyền, giá hay chính sách.
-- Dùng dữ liệu production hoặc dữ liệu khách thật.
+- Nhiều doanh nghiệp/tenant, kết nối sàn bên ngoài, bán hàng hoặc giao vận.
+- Chia sẻ database nghiệp vụ trực tiếp với AI hoặc cho model gọi SQL/URL tùy ý.
+- Để Agent tự cập nhật tiền, hoàn cọc, quyền, giá hoặc chính sách; mọi nhóm ghi chỉ được xem xét sau cổng riêng.
+- Dùng dữ liệu khách thật trong fixture, demo hoặc bộ đánh giá.
 
 ### Cần chủ sản phẩm chốt
 
-1. Prototype hiện dùng route nhân viên `/van-hanh/ops-agent`; có cần thêm panel theo ngữ cảnh ở dashboard/màn nghiệp vụ không?
-2. Những endpoint Studio nào cần mở cho Agent sau giai đoạn hỏi đáp tài liệu?
-3. MVP chỉ đọc tài liệu/fixture hay cần API nghiệp vụ; nếu dùng API Studio, contract nào được xác nhận?
-4. Cách đồng bộ thay đổi giữa hai repo và ai duyệt domain/UI drift?
-5. Xác thực, role/scope, model/provider, deployment và ngân sách.
-6. Quy tắc lưu hội thoại/audit, PII, retention và nội dung được gửi tới provider.
-7. Ai phê duyệt SOP để nội dung đề xuất trở thành hướng dẫn đã xác nhận?
-8. Có thao tác nào ngoài MVP được phép chuẩn bị hoặc thực hiện và cần phê duyệt nào?
-9. Risk rules nào được xem là quy tắc nghiệp vụ chính thức, ai sở hữu và ai duyệt thay đổi?
-10. Có đủ dữ liệu lịch sử sạch để làm dự đoán không; metric và mức sai số nào được chấp nhận?
+1. Case và hàng đợi việc gắn một chi nhánh đang chọn hay toàn bộ các chi nhánh actor có quyền? Đề xuất: một chi nhánh/case; tra cứu toàn chuỗi là quyền riêng.
+2. Ai nhận, xác nhận, duyệt và bàn giao việc? Người tạo và người duyệt có phải tách cho từng nhóm tác động không?
+3. Ai sở hữu nguồn policy, phiên bản, hiệu lực, quyền xem và quy trình thu hồi? API nghiệp vụ luôn là nguồn chuẩn cho tiền/khả dụng.
+4. Retention, quyền xem/xóa case, văn bản nào được gửi tới provider và mức che PII là bao nhiêu?
+5. Nhóm tool ghi nào được xem xét đầu tiên? Đề xuất lịch/chặn bộ, rồi điều chuyển và đơn; tài chính cần cổng riêng.
+6. Phương thức hoàn cọc và đối soát cuối cùng là gì? Trước khi chốt, Agent chỉ nêu trạng thái và điểm cần quyết định.
+7. Chủ sở hữu rule tạo việc, ngưỡng cảnh báo, hạn xử lý và số đo chất lượng là ai? Chỉ gọi là dự đoán khi đạt FR-31.
 
 ## 11. Thứ tự triển khai đề xuất
 
-1. **P0:** chốt API contract xác thực, quyền và response envelope giữa Studio với Ops Agent.
-2. **P1 — Knowledge assistant:** làm ingestion/RAG có trích dẫn, fixture DEMO và bộ đánh giá độ đúng nguồn; chưa có write action.
-3. **P2 — Read-only operations copilot:** xây runtime/case state, read tools theo API contract, quyền, trace, termination và handoff.
-4. **P3 — Decision support:** thêm risk rules xác định, what-if simulation và xếp hạng phương án; chỉ gọi là dự đoán sau khi qua điều kiện FR-31.
-5. **P4 — Supervised execution:** mở từng write tool sau approval, idempotency, version check, post-action verification và release gate riêng.
-6. **P5 — Closed-loop operations:** kích hoạt theo lịch/sự kiện, theo dõi outcome và tái lập kế hoạch trong phạm vi an toàn; rollout từng capability, không bật tự trị toàn hệ thống.
+1. **S0 — Contract an toàn:** chốt chi nhánh của case, ma trận quyền, nguồn policy, request/error/schema version và contract tests hai repo.
+2. **S1 — Đọc có bằng chứng:** nghiệm thu RAG và tool đọc trên bảy hành trình Studio, xử lý thiếu nguồn/quyền/xung đột, tối thiểu hóa dữ liệu gửi model.
+3. **S2 — Việc chủ động:** Studio tạo việc theo sự kiện/trạng thái và rule xác định; AI tóm tắt, xếp phương án, nhân viên thấy hàng đợi theo chi nhánh và hạn.
+4. **S3 — Tiếp tục và bàn giao:** tìm/tiếp tục case, liên kết việc Studio, chống trùng tạo case, lịch sử và phục hồi sau timeout.
+5. **S4 — Quyết định có duyệt:** giả lập snapshot, preview bất biến, approval gắn action/version/actor/branch, fault injection; chưa mở ghi production.
+6. **S5 — Mở từng nhóm có kiểm soát:** chỉ sau cổng nghiệp vụ, E2E và hạ tầng; đọc lại kết quả và theo dõi outcome. Không bật tự trị toàn hệ thống hoặc hành động tài chính mặc định.
+
+Ngày dự kiến, chủ trì, backlog và cổng ra chặng nằm trong [kế hoạch sản phẩm tại Studio](https://github.com/BinCry/Costume-Rental-Studio/blob/main/docs/operations/ke-hoach-phat-trien-ops-agent.md). Phần hạ tầng được hoãn triển khai, nhưng không được bỏ qua khi quyết định phát hành nhóm ghi.

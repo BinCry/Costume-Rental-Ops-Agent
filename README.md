@@ -16,6 +16,7 @@ Service Python độc lập bổ sung Ops Agent và RAG cho [Costume Rental Stud
 ## Tài liệu chính
 
 - [Yêu cầu sản phẩm Ops Agent](docs/product-requirements.md)
+- [Kế hoạch phát triển Ops Agent trong hệ thống Studio](https://github.com/BinCry/Costume-Rental-Studio/blob/main/docs/operations/ke-hoach-phat-trien-ops-agent.md)
 - [Quy trình nghiệp vụ](docs/business-processes.md)
 - [Đặc tả hành vi Agent](docs/agent-behavior-spec.md)
 - [Tools và tích hợp](docs/tools-and-integrations.md)
