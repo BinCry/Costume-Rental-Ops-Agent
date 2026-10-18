@@ -142,6 +142,7 @@ async def run_graph_turn(
     actor: ActorContext,
     case_id: UUID,
     message: str,
+    branch_id: UUID,
     *,
     remaining_case_steps: int | None = None,
     remaining_case_tokens: int | None = None,
@@ -301,7 +302,10 @@ async def run_graph_turn(
         )
         try:
             result = await client.execute(
-                actor_id=actor.user_id, request_id=str(request_id), invocation=invocation
+                actor_id=actor.user_id,
+                request_id=str(request_id),
+                branch_id=str(branch_id),
+                invocation=invocation,
             )
         except ToolInvocationError as error:
             await finish_tool_call(tool_call_id, error.code, {"status": error.code})

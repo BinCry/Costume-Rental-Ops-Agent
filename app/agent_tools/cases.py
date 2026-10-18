@@ -29,6 +29,7 @@ def _case_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(row["id"]),
         "actor_id": str(row["actor_id"]),
+        "branch_id": str(row["branch_id"]) if row.get("branch_id") else None,
         "audiences": tuple(row["audiences"]),
         "state": AgentCaseState(row["state"]),
         "created_at": row["created_at"],
@@ -43,31 +44,34 @@ def _case_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _create_case(actor_id: UUID, audiences: tuple[str, ...]) -> dict[str, Any]:
+def _create_case(actor_id: UUID, audiences: tuple[str, ...], branch_id: UUID) -> dict[str, Any]:
     with _require_pool().connection() as connection:
         row = connection.execute(
             """
-            INSERT INTO agent_cases (actor_id, audiences, state)
-            VALUES (%s, %s, %s)
-            RETURNING id, actor_id, audiences, state, created_at, updated_at, completed_at,
+            INSERT INTO agent_cases (actor_id, audiences, branch_id, state)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id, actor_id, audiences, branch_id, state,
+              created_at, updated_at, completed_at,
               goal, version, termination_reason, last_run_status, active_run_id, active_run_deadline
             """,
-            (actor_id, list(audiences), AgentCaseState.NEW.value),
+            (actor_id, list(audiences), branch_id, AgentCaseState.NEW.value),
         ).fetchone()
     if row is None:
         raise RuntimeError("Could not create agent case")
     return _case_row(row)
 
 
-async def create_case(actor_id: UUID, audiences: tuple[str, ...]) -> dict[str, Any]:
-    return await asyncio.to_thread(_create_case, actor_id, audiences)
+async def create_case(
+    actor_id: UUID, audiences: tuple[str, ...], branch_id: UUID
+) -> dict[str, Any]:
+    return await asyncio.to_thread(_create_case, actor_id, audiences, branch_id)
 
 
 def _get_case(case_id: UUID, actor_id: UUID) -> dict[str, Any] | None:
     with _require_pool().connection() as connection:
         row = connection.execute(
             """
-            SELECT id, actor_id, audiences, state, created_at, updated_at, completed_at,
+            SELECT id, actor_id, audiences, branch_id, state, created_at, updated_at, completed_at,
               goal, version, termination_reason, last_run_status, active_run_id, active_run_deadline
             FROM agent_cases
             WHERE id = %s AND actor_id = %s
@@ -85,7 +89,7 @@ def _get_case_by_id(case_id: UUID) -> dict[str, Any] | None:
     with _require_pool().connection() as connection:
         row = connection.execute(
             """
-            SELECT id, actor_id, audiences, state, created_at, updated_at, completed_at,
+            SELECT id, actor_id, audiences, branch_id, state, created_at, updated_at, completed_at,
               goal, version, termination_reason, last_run_status, active_run_id, active_run_deadline
             FROM agent_cases WHERE id = %s
             """,

@@ -9,7 +9,7 @@ from pydantic import Field, field_validator
 
 from app.models import ApiModel
 
-AGENT_TOOLS_CONTRACT_VERSION = "agent-tools/v1"
+AGENT_TOOLS_CONTRACT_VERSION = "agent-tools/v2"
 
 
 class AgentCaseState(StrEnum):

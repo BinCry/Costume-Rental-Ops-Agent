@@ -7,7 +7,7 @@ from hashlib import sha256
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
-from app.agent_tools.cases import finish_tool_call, start_tool_call
+from app.agent_tools.cases import finish_tool_call, get_case, start_tool_call
 from app.agent_tools.client import AgentToolClient, ToolInvocationError
 from app.agent_tools.guard import WRITE_TOOL_POLICIES, validate_tool_arguments
 from app.agent_tools.models import (
@@ -79,6 +79,9 @@ async def _call(
     approval_id: UUID | None = None,
     payload_hash: str | None = None,
 ) -> AgentToolExecutionResult:
+    case = await get_case(case_id, UUID(actor.user_id))
+    if case is None or not case.get("branch_id"):
+        raise ToolInvocationError("INVALID_CASE_BRANCH", "Case branch is missing")
     tool_call_id = uuid5(NAMESPACE_URL, f"{idempotency_key}:{tool_name}")
     request_id = uuid4()
     await start_tool_call(
@@ -105,6 +108,7 @@ async def _call(
         result = await _client().execute(
             actor_id=actor.user_id,
             request_id=str(request_id),
+            branch_id=str(case["branch_id"]),
             invocation=invocation,
         )
     except ToolInvocationError as error:

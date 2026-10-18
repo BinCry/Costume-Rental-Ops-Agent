@@ -103,7 +103,7 @@ Luồng chuẩn là: **nhận mục tiêu hoặc tín hiệu → thu thập bằ
 
 ### Bề mặt API hiện tại
 
-Python service cung cấp `POST /api/v1/knowledge/search`, `POST /api/v1/knowledge/answer`, `POST /api/v1/agent/messages`, đọc case và các endpoint xác nhận, duyệt, từ chối, hủy. Các route nội bộ dùng `X-AI-Service-Key`; Python service **không nhận Bearer token Studio từ trình duyệt**. Studio API xác thực người dùng, tạo actor context tin cậy, kiểm quyền rồi chuyển tiếp tới AI. AI gọi lại callback `agent-tools/v1` của Studio API với service key và actor context. Trình duyệt không được nhận service key. Cờ tool ghi mặc định tắt và Studio API còn chặn ở service layer, nên sự tồn tại của route duyệt không đồng nghĩa quyền thực thi.
+Python service cung cấp `POST /api/v1/knowledge/search`, `POST /api/v1/knowledge/answer`, `POST /api/v1/agent/messages`, đọc case và các endpoint xác nhận, duyệt, từ chối, hủy. Các route nội bộ dùng `X-AI-Service-Key`; Python service **không nhận Bearer token Studio từ trình duyệt**. Studio API xác thực người dùng, tạo actor context tin cậy, kiểm quyền rồi chuyển tiếp tới AI. Mã đang chuẩn bị callback `agent-tools/v2` (bắt buộc `X-Case-Branch-Id`) đồng bộ với Studio API; migration 006 và phát hành production chưa thực hiện. Trình duyệt không được nhận service key. Cờ tool ghi mặc định tắt và Studio API còn chặn ở service layer, nên sự tồn tại của route duyệt không đồng nghĩa quyền thực thi.
 
 ## 6. Luồng nghiệm thu cốt lõi
 
@@ -172,7 +172,7 @@ Fixture chỉ dành cho kiểm thử/demo có nhãn rõ. Mỗi nguồn mới c�
 
 ### Cần chủ sản phẩm chốt
 
-1. Case và hàng đợi việc gắn một chi nhánh đang chọn hay toàn bộ các chi nhánh actor có quyền? Đề xuất: một chi nhánh/case; tra cứu toàn chuỗi là quyền riêng.
+1. Case hiện được triển khai trong mã theo một chi nhánh đang chọn (`agent_cases.branch_id`, migration 006; callback `agent-tools/v2`). Chưa phát hành production hoặc kiểm E2E. Hàng đợi việc gắn chi nhánh và quyền tra cứu toàn chuỗi vẫn cần chốt riêng.
 2. Ai nhận, xác nhận, duyệt và bàn giao việc? Người tạo và người duyệt có phải tách cho từng nhóm tác động không?
 3. Ai sở hữu nguồn policy, phiên bản, hiệu lực, quyền xem và quy trình thu hồi? API nghiệp vụ luôn là nguồn chuẩn cho tiền/khả dụng.
 4. Retention, quyền xem/xóa case, văn bản nào được gửi tới provider và mức che PII là bao nhiêu?

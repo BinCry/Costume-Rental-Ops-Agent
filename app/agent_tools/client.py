@@ -54,6 +54,7 @@ class AgentToolClient:
         *,
         actor_id: str,
         request_id: str,
+        branch_id: str,
         invocation: AgentToolExecutionRequest,
     ) -> AgentToolExecutionResult:
         """Execute a registered tool; unknown transport outcomes are never retried here."""
@@ -61,12 +62,15 @@ class AgentToolClient:
             raise ToolInvocationError("INVALID_ACTOR", "An authenticated actor is required")
         if not request_id.strip():
             raise ToolInvocationError("INVALID_REQUEST_ID", "request_id is required")
+        if not branch_id.strip():
+            raise ToolInvocationError("INVALID_CASE_BRANCH", "Case branch is required")
 
         headers = {
             "X-AI-Service-Key": self._service_key,
             "X-Actor-Id": actor_id,
             "X-Request-Id": request_id,
             "X-Agent-Tools-Contract": AGENT_TOOLS_CONTRACT_VERSION,
+            "X-Case-Branch-Id": branch_id,
         }
         payload = invocation.model_dump(mode="json", by_alias=True)
 
@@ -82,15 +86,19 @@ class AgentToolClient:
         *,
         actor_id: str,
         request_id: str,
+        branch_id: str,
         required_permission: str,
         branch_ids: tuple[str, ...],
     ) -> bool:
         """Ask Studio to validate approver permission and branch scope."""
+        if not branch_id.strip():
+            raise ToolInvocationError("INVALID_CASE_BRANCH", "Case branch is required")
         headers = {
             "X-AI-Service-Key": self._service_key,
             "X-Actor-Id": actor_id,
             "X-Request-Id": request_id,
             "X-Agent-Tools-Contract": AGENT_TOOLS_CONTRACT_VERSION,
+            "X-Case-Branch-Id": branch_id,
         }
         payload = {
             "requiredPermission": required_permission,

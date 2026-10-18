@@ -11,6 +11,7 @@ MIGRATIONS = (
     ("003_agent_runtime_python", "003_agent_runtime.sql"),
     ("004_agent_run_budgets_python", "004_agent_run_budgets.sql"),
     ("005_agent_sync_runtime_python", "005_agent_sync_runtime.sql"),
+    ("006_agent_case_branch_scope_python", "006_agent_case_branch_scope.sql"),
 )
 
 

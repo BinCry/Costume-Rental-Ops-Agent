@@ -12,10 +12,12 @@ from app.models import ActorContext, AgentCaseResponse, AgentEvidence
 SERVICE_KEY = "test-ai-internal-key-at-least-32-characters"
 ACTOR_ID = str(uuid4())
 CASE_ID = uuid4()
+BRANCH_ID = uuid4()
 HEADERS = {
     "X-AI-Service-Key": SERVICE_KEY,
     "X-Actor-Id": ACTOR_ID,
     "X-Knowledge-Audiences": "customer,shared",
+    "X-Case-Branch-Id": str(BRANCH_ID),
 }
 
 
@@ -54,7 +56,7 @@ async def test_agent_message_requires_authenticated_actor() -> None:
                 "X-Actor-Id": "guest",
                 "X-Knowledge-Audiences": "customer,shared",
             },
-            json={"message": "Tình trạng đơn của tôi?"},
+            json={"message": "Tình trạng đơn của tôi?", "branchId": str(BRANCH_ID)},
         )
 
     assert result.status_code == 401
@@ -67,8 +69,10 @@ async def test_agent_message_uses_trusted_actor_and_returns_standard_envelope(
 ) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_answer(actor: ActorContext, message: str, case_id: object) -> AgentCaseResponse:
-        captured.update(actor=actor, message=message, case_id=case_id)
+    async def fake_answer(
+        actor: ActorContext, message: str, case_id: object, branch_id: UUID
+    ) -> AgentCaseResponse:
+        captured.update(actor=actor, message=message, case_id=case_id, branch_id=branch_id)
         return response()
 
     monkeypatch.setattr(routes, "answer_agent_message", fake_answer)
@@ -77,7 +81,7 @@ async def test_agent_message_uses_trusted_actor_and_returns_standard_envelope(
         result = await client.post(
             "/api/v1/agent/messages",
             headers=HEADERS,
-            json={"message": "Tình trạng đơn của tôi?"},
+            json={"message": "Tình trạng đơn của tôi?", "branchId": str(BRANCH_ID)},
         )
 
     assert result.status_code == 200
@@ -85,6 +89,24 @@ async def test_agent_message_uses_trusted_actor_and_returns_standard_envelope(
     assert captured["actor"] == ActorContext(user_id=ACTOR_ID, audiences=("customer", "shared"))
     assert captured["message"] == "Tình trạng đơn của tôi?"
     assert captured["case_id"] is None
+    assert captured["branch_id"] == BRANCH_ID
+
+
+@pytest.mark.asyncio
+async def test_agent_message_rejects_mismatched_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def never_called(*_: object) -> AgentCaseResponse:
+        raise AssertionError("branch mismatch must be blocked before runtime")
+
+    monkeypatch.setattr(routes, "answer_agent_message", never_called)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        result = await client.post(
+            "/api/v1/agent/messages",
+            headers=HEADERS,
+            json={"message": "Kiểm tra đơn", "branchId": str(uuid4())},
+        )
+    assert result.status_code == 403
+    assert result.json()["error"]["code"] == "AGENT_BRANCH_MISMATCH"
 
 
 @pytest.mark.asyncio
@@ -122,8 +144,11 @@ async def test_agent_approval_uses_trusted_actor(monkeypatch: pytest.MonkeyPatch
         approval: UUID,
         approve: bool,
         reason: str | None = None,
+        branch_id: UUID | None = None,
     ) -> AgentCaseResponse:
-        captured.update(actor=actor, approval=approval, approve=approve, reason=reason)
+        captured.update(
+            actor=actor, approval=approval, approve=approve, reason=reason, branch_id=branch_id
+        )
         return response()
 
     monkeypatch.setattr(routes, "decide_case_approval", fake_decide)
@@ -140,3 +165,4 @@ async def test_agent_approval_uses_trusted_actor(monkeypatch: pytest.MonkeyPatch
     assert captured["approve"] is True
     assert captured["reason"] == "Reviewed"
     assert captured["actor"] == ActorContext(user_id=ACTOR_ID, audiences=("customer", "shared"))
+    assert captured["branch_id"] == BRANCH_ID

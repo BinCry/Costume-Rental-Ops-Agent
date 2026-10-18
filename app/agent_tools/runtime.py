@@ -76,10 +76,18 @@ def _run_timeout_seconds() -> float:
     )
 
 
+def _require_case_branch(case: dict[str, Any] | None, branch_id: UUID) -> dict[str, Any]:
+    # A legacy unscoped case must never be silently assigned to the current branch.
+    if case is None or case.get("branch_id") != str(branch_id):
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    return case
+
+
 async def answer_agent_message(
     actor: ActorContext,
     message: str,
     case_id: UUID | None,
+    branch_id: UUID,
 ) -> AgentCaseResponse:
     try:
         actor_id = UUID(actor.user_id)
@@ -87,13 +95,9 @@ async def answer_agent_message(
         raise AppError(400, "INVALID_ACTOR_CONTEXT", "Trusted actor context is invalid") from error
 
     if case_id is None:
-        case = await create_case(actor_id, tuple(actor.audiences))
+        case = await create_case(actor_id, tuple(actor.audiences), branch_id)
     else:
-        existing_case = await get_case(case_id, actor_id)
-        if existing_case is None:
-            # Do not reveal whether another actor owns the requested case.
-            raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
-        case = existing_case
+        case = _require_case_branch(await get_case(case_id, actor_id), branch_id)
 
     current = case["state"]
     if current not in {AgentCaseState.NEW, AgentCaseState.WAITING_INPUT}:
@@ -190,6 +194,7 @@ async def answer_agent_message(
                 actor,
                 resolved_case_id,
                 message,
+                branch_id,
                 remaining_case_steps=remaining_steps,
                 remaining_case_tokens=remaining_tokens,
                 goal=goal,
@@ -588,13 +593,19 @@ async def _enrich_write_proposal(
     ), [evidence]
 
 
-async def read_agent_case(actor: ActorContext, case_id: UUID) -> AgentCaseResponse:
+async def read_agent_case(
+    actor: ActorContext, case_id: UUID, branch_id: UUID | None = None
+) -> AgentCaseResponse:
     try:
         actor_id = UUID(actor.user_id)
     except ValueError as error:
         raise AppError(400, "INVALID_ACTOR_CONTEXT", "Trusted actor context is invalid") from error
     case = await get_case_overview(case_id, actor_id)
     if case is None:
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    if branch_id is not None:
+        _require_case_branch(case, branch_id)
+    if not case.get("branch_id"):
         raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
     terminal = {
         AgentCaseState.SUCCEEDED,
@@ -1088,6 +1099,7 @@ async def decide_case_confirmation(
     confirmation_id: UUID,
     approve: bool,
     reason: str | None = None,
+    branch_id: UUID | None = None,
 ) -> AgentCaseResponse:
     """Record requester confirmation and synchronously continue the frozen action."""
     try:
@@ -1095,7 +1107,9 @@ async def decide_case_confirmation(
     except ValueError as error:
         raise AppError(400, "INVALID_ACTOR_CONTEXT", "Trusted actor context is invalid") from error
     case = await get_case(case_id, actor_id)
-    if case is None:
+    if branch_id is not None:
+        _require_case_branch(case, branch_id)
+    elif case is None:
         raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
     if case["state"] != AgentCaseState.WAITING_CONFIRMATION:
         raise AppError(409, "INVALID_CASE_TRANSITION", "Case is not waiting for confirmation")
@@ -1159,6 +1173,7 @@ async def decide_case_approval(
     approval_id: UUID,
     approve: bool,
     reason: str | None = None,
+    branch_id: UUID | None = None,
 ) -> AgentCaseResponse:
     """Authorize an approver in Studio, record the decision, then resume synchronously."""
     try:
@@ -1171,6 +1186,10 @@ async def decide_case_approval(
     case_id = pending["case_id"]
     case = await get_case_by_id(case_id)
     if case is None:
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    if branch_id is not None:
+        _require_case_branch(case, branch_id)
+    if not case.get("branch_id"):
         raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
     if case["state"] is not AgentCaseState.WAITING_APPROVAL:
         raise AppError(409, "INVALID_CASE_TRANSITION", "Case is not waiting for approval")
@@ -1194,6 +1213,7 @@ async def decide_case_approval(
             authorized = await client.authorize_approval(
                 actor_id=actor.user_id,
                 request_id=str(uuid4()),
+                branch_id=str(case["branch_id"]),
                 required_permission=str(pending["required_permission"]),
                 branch_ids=tuple(str(item) for item in pending["required_branch_ids"]),
             )
@@ -1261,13 +1281,17 @@ async def decide_case_approval(
         raise
 
 
-async def cancel_agent_case(actor: ActorContext, case_id: UUID) -> AgentCaseResponse:
+async def cancel_agent_case(
+    actor: ActorContext, case_id: UUID, branch_id: UUID | None = None
+) -> AgentCaseResponse:
     try:
         actor_id = UUID(actor.user_id)
     except ValueError as error:
         raise AppError(400, "INVALID_ACTOR_CONTEXT", "Trusted actor context is invalid") from error
     case = await get_case(case_id, actor_id)
-    if case is None:
+    if branch_id is not None:
+        _require_case_branch(case, branch_id)
+    elif case is None:
         raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
     if case.get("active_run_id") is not None:
         raise AppError(409, "CASE_BUSY", "An agent request is already running for this case")

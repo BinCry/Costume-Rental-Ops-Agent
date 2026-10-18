@@ -3,7 +3,7 @@
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header
 
 from app.agent_tools.runtime import (
     answer_agent_message,
@@ -13,6 +13,7 @@ from app.agent_tools.runtime import (
     read_agent_case,
 )
 from app.auth import require_actor, require_internal_service
+from app.errors import AppError
 from app.models import (
     ActorContext,
     AgentCaseResponse,
@@ -24,6 +25,7 @@ from app.models import (
 )
 
 router = APIRouter(dependencies=[Depends(require_internal_service)])
+CaseBranch = Annotated[UUID, Header(alias="X-Case-Branch-Id")]
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     400: {"model": ErrorResponse, "description": "Invalid request"},
@@ -44,8 +46,11 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
 async def message(
     body: AgentMessageInput,
     actor: Annotated[ActorContext, Depends(require_actor)],
+    case_branch_id: CaseBranch,
 ) -> SuccessResponse[AgentMessageData]:
-    result = await answer_agent_message(actor, body.message, body.case_id)
+    if body.branch_id != case_branch_id:
+        raise AppError(403, "AGENT_BRANCH_MISMATCH", "Selected branch does not match the request")
+    result = await answer_agent_message(actor, body.message, body.case_id, case_branch_id)
     return SuccessResponse(
         success=True,
         data=AgentMessageData(result=result),
@@ -61,8 +66,9 @@ async def message(
 async def get_case_state(
     case_id: UUID,
     actor: Annotated[ActorContext, Depends(require_actor)],
+    case_branch_id: CaseBranch,
 ) -> SuccessResponse[AgentCaseResponse]:
-    result = await read_agent_case(actor, case_id)
+    result = await read_agent_case(actor, case_id, case_branch_id)
     return SuccessResponse(success=True, data=result, message="Agent case retrieved")
 
 
@@ -75,10 +81,11 @@ async def confirm_case_action(
     case_id: UUID,
     confirmation_id: UUID,
     actor: Annotated[ActorContext, Depends(require_actor)],
+    case_branch_id: CaseBranch,
     body: AgentDecisionInput | None = None,
 ) -> SuccessResponse[AgentCaseResponse]:
     result = await decide_case_confirmation(
-        actor, case_id, confirmation_id, True, body.reason if body else None
+        actor, case_id, confirmation_id, True, body.reason if body else None, case_branch_id
     )
     return SuccessResponse(success=True, data=result, message="Agent confirmation recorded")
 
@@ -92,10 +99,11 @@ async def reject_case_action(
     case_id: UUID,
     confirmation_id: UUID,
     actor: Annotated[ActorContext, Depends(require_actor)],
+    case_branch_id: CaseBranch,
     body: AgentDecisionInput | None = None,
 ) -> SuccessResponse[AgentCaseResponse]:
     result = await decide_case_confirmation(
-        actor, case_id, confirmation_id, False, body.reason if body else None
+        actor, case_id, confirmation_id, False, body.reason if body else None, case_branch_id
     )
     return SuccessResponse(success=True, data=result, message="Agent confirmation rejected")
 
@@ -108,9 +116,12 @@ async def reject_case_action(
 async def approve_case_action(
     approval_id: UUID,
     actor: Annotated[ActorContext, Depends(require_actor)],
+    case_branch_id: CaseBranch,
     body: AgentDecisionInput | None = None,
 ) -> SuccessResponse[AgentCaseResponse]:
-    result = await decide_case_approval(actor, approval_id, True, body.reason if body else None)
+    result = await decide_case_approval(
+        actor, approval_id, True, body.reason if body else None, case_branch_id
+    )
     return SuccessResponse(success=True, data=result, message="Agent approval recorded")
 
 
@@ -122,9 +133,12 @@ async def approve_case_action(
 async def reject_approval_action(
     approval_id: UUID,
     actor: Annotated[ActorContext, Depends(require_actor)],
+    case_branch_id: CaseBranch,
     body: AgentDecisionInput | None = None,
 ) -> SuccessResponse[AgentCaseResponse]:
-    result = await decide_case_approval(actor, approval_id, False, body.reason if body else None)
+    result = await decide_case_approval(
+        actor, approval_id, False, body.reason if body else None, case_branch_id
+    )
     return SuccessResponse(success=True, data=result, message="Agent approval rejected")
 
 
@@ -136,6 +150,7 @@ async def reject_approval_action(
 async def cancel_case_action(
     case_id: UUID,
     actor: Annotated[ActorContext, Depends(require_actor)],
+    case_branch_id: CaseBranch,
 ) -> SuccessResponse[AgentCaseResponse]:
-    result = await cancel_agent_case(actor, case_id)
+    result = await cancel_agent_case(actor, case_id, case_branch_id)
     return SuccessResponse(success=True, data=result, message="Agent case cancelled")

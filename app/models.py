@@ -93,6 +93,7 @@ class ActorContext(BaseModel):
 
 class AgentMessageInput(RequestModel):
     message: str = Field(min_length=2, max_length=2_000)
+    branch_id: UUID
     case_id: UUID | None = None
 
 

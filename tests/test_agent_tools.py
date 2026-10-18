@@ -718,6 +718,7 @@ async def test_graph_turn_wires_skill_budget_to_guard_and_recursion(
         ActorContext(user_id=str(uuid4()), audiences=("customer", "shared")),
         uuid4(),
         "hello",
+        uuid4(),
         goal=goal,
     )
 
@@ -980,6 +981,7 @@ async def test_client_sends_only_fixed_internal_endpoint_and_trusted_headers() -
     result = await tool_client.execute(
         actor_id="staff-1",
         request_id="request-1",
+        branch_id="00000000-0000-4000-8000-000000000001",
         invocation=invocation(),
     )
 
@@ -989,10 +991,40 @@ async def test_client_sends_only_fixed_internal_endpoint_and_trusted_headers() -
     assert isinstance(headers, httpx.Headers)
     assert headers["X-AI-Service-Key"] == "key"
     assert headers["X-Actor-Id"] == "staff-1"
-    assert headers["X-Agent-Tools-Contract"] == "agent-tools/v1"
+    assert headers["X-Agent-Tools-Contract"] == "agent-tools/v2"
+    assert headers["X-Case-Branch-Id"] == "00000000-0000-4000-8000-000000000001"
     body = seen["body"]
     assert isinstance(body, dict)
     assert body["toolName"] == "get_rental_order"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_approval_authorization_sends_case_branch_to_studio() -> None:
+    seen: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["branch_id"] = request.headers.get("X-Case-Branch-Id")
+        return httpx.Response(200, json={"success": True, "data": {"decision": "allowed"}})
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://studio.test"
+    )
+    tool_client = AgentToolClient(base_url="http://studio.test", service_key="key", client=client)
+    branch_id = "00000000-0000-4000-8000-000000000001"
+    allowed = await tool_client.authorize_approval(
+        actor_id="staff-1",
+        request_id="request-1",
+        branch_id=branch_id,
+        required_permission="transfers:manage",
+        branch_ids=(branch_id,),
+    )
+    assert allowed
+    assert seen == {
+        "path": "/api/v1/internal/agent-tools/authorize-approval",
+        "branch_id": branch_id,
+    }
     await client.aclose()
 
 
@@ -1010,6 +1042,7 @@ async def test_timeout_is_never_interpreted_as_a_successful_write() -> None:
         await tool_client.execute(
             actor_id="staff-1",
             request_id="request-1",
+            branch_id="00000000-0000-4000-8000-000000000001",
             invocation=invocation(),
         )
     assert error.value.code == "TOOL_OUTCOME_UNKNOWN"
@@ -1025,8 +1058,8 @@ async def test_rag_turn_persists_only_evidence_and_uses_guarded_state_path(
     transitions: list[AgentCaseState] = []
     persisted: dict[str, object] = {}
 
-    async def fake_create_case(_: object, __: object) -> dict[str, object]:
-        return {"id": str(case_id), "state": AgentCaseState.NEW}
+    async def fake_create_case(_: object, __: object, branch_id: UUID) -> dict[str, object]:
+        return {"id": str(case_id), "state": AgentCaseState.NEW, "branch_id": str(branch_id)}
 
     async def fake_transition(_: object, __: object, state: AgentCaseState) -> AgentCaseState:
         transitions.append(state)
@@ -1053,6 +1086,7 @@ async def test_rag_turn_persists_only_evidence_and_uses_guarded_state_path(
         ActorContext(user_id=str(actor_id), audiences=("customer", "shared")),
         "Tôi muốn hỏi trạng thái đơn.",
         None,
+        uuid4(),
     )
 
     assert result.case_id == case_id
@@ -1072,6 +1106,7 @@ async def test_runtime_treats_explicit_goal_achieved_as_success(
 ) -> None:
     case_id = uuid4()
     actor_id = uuid4()
+    branch_id = uuid4()
     run_id = uuid4()
     transitions: list[AgentCaseState] = []
     goal = infer_goal("hello")
@@ -1081,6 +1116,7 @@ async def test_runtime_treats_explicit_goal_achieved_as_success(
             "id": str(case_id),
             "state": AgentCaseState.NEW,
             "version": 1,
+            "branch_id": str(branch_id),
         }
 
     async def fake_create_run(*_: object) -> object:
@@ -1131,6 +1167,7 @@ async def test_runtime_treats_explicit_goal_achieved_as_success(
         ActorContext(user_id=str(actor_id), audiences=("customer", "shared")),
         "hello",
         case_id,
+        branch_id,
     )
 
     assert result.state == AgentCaseState.SUCCEEDED
@@ -1144,6 +1181,7 @@ async def test_goal_resolution_failure_releases_active_run(
 ) -> None:
     case_id = uuid4()
     actor_id = uuid4()
+    branch_id = uuid4()
     run_id = uuid4()
     marked: list[tuple[object, ...]] = []
 
@@ -1152,6 +1190,7 @@ async def test_goal_resolution_failure_releases_active_run(
             "id": str(case_id),
             "state": AgentCaseState.NEW,
             "version": 1,
+            "branch_id": str(branch_id),
         }
 
     async def fake_create_run(*_: object) -> object:
@@ -1177,7 +1216,37 @@ async def test_goal_resolution_failure_releases_active_run(
             ActorContext(user_id=str(actor_id), audiences=("staff_internal",)),
             "Kiểm tra đơn",
             case_id,
+            branch_id,
         )
 
     assert error.value.code == "GOAL_RESOLUTION_FAILED"
     assert marked == [(run_id, AgentRunStatus.FAILED, "GOAL_RESOLUTION_FAILED")]
+
+
+@pytest.mark.asyncio
+async def test_existing_case_cannot_cross_branch_or_use_legacy_unscoped_case(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case_id = uuid4()
+    actor_id = uuid4()
+    selected_branch = uuid4()
+    stored_case: dict[str, object] = {
+        "id": str(case_id),
+        "state": AgentCaseState.WAITING_INPUT,
+        "branch_id": str(uuid4()),
+    }
+
+    async def fake_get_case(*_: object) -> dict[str, object]:
+        return stored_case
+
+    monkeypatch.setattr("app.agent_tools.runtime.get_case", fake_get_case)
+    for stored_branch in (stored_case["branch_id"], None):
+        stored_case["branch_id"] = stored_branch
+        with pytest.raises(AppError) as error:
+            await answer_agent_message(
+                ActorContext(user_id=str(actor_id), audiences=("staff_internal",)),
+                "Kiểm tra đơn",
+                case_id,
+                selected_branch,
+            )
+        assert error.value.code == "AGENT_CASE_NOT_FOUND"
