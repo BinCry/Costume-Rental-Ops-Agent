@@ -1107,10 +1107,10 @@ async def decide_case_confirmation(
     except ValueError as error:
         raise AppError(400, "INVALID_ACTOR_CONTEXT", "Trusted actor context is invalid") from error
     case = await get_case(case_id, actor_id)
+    if case is None:
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
     if branch_id is not None:
         _require_case_branch(case, branch_id)
-    elif case is None:
-        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
     if case["state"] != AgentCaseState.WAITING_CONFIRMATION:
         raise AppError(409, "INVALID_CASE_TRANSITION", "Case is not waiting for confirmation")
     try:
@@ -1289,10 +1289,10 @@ async def cancel_agent_case(
     except ValueError as error:
         raise AppError(400, "INVALID_ACTOR_CONTEXT", "Trusted actor context is invalid") from error
     case = await get_case(case_id, actor_id)
+    if case is None:
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
     if branch_id is not None:
         _require_case_branch(case, branch_id)
-    elif case is None:
-        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
     if case.get("active_run_id") is not None:
         raise AppError(409, "CASE_BUSY", "An agent request is already running for this case")
     if case["state"] in {
