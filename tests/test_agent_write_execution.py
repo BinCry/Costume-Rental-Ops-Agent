@@ -233,6 +233,54 @@ async def test_versioned_write_succeeds_only_after_readback(
 
 
 @pytest.mark.asyncio
+async def test_confirmed_write_sends_frozen_action_evidence_to_studio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order_id = str(uuid4())
+    item_id = str(uuid4())
+    unit_id = str(uuid4())
+    confirmation_id = uuid4()
+    snapshot, stored_hash = frozen(
+        "reallocate_rental_item",
+        {
+            "orderId": order_id,
+            "orderItemId": item_id,
+            "unitId": unit_id,
+            "reason": "Rental readiness recommendation",
+        },
+        4,
+    )
+    calls: list[dict[str, Any]] = []
+
+    async def fake_call(**kwargs: Any) -> AgentToolExecutionResult:
+        calls.append(kwargs)
+        return AgentToolExecutionResult(
+            status=ToolExecutionStatus.OK,
+            data={"id": order_id, "items": [{"id": item_id, "unitId": unit_id}]},
+            observed_at=datetime.now(UTC),
+        )
+
+    async def fake_prior(_: object) -> None:
+        return None
+
+    monkeypatch.setattr(execution, "get_tool_call", fake_prior)
+    monkeypatch.setattr(execution, "_call", fake_call)
+    result = await execution.execute_frozen_action(
+        actor=ActorContext(user_id=str(uuid4()), audiences=("staff_internal",)),
+        case_id=uuid4(),
+        snapshot=snapshot,
+        stored_hash=stored_hash,
+        confirmation_id=confirmation_id,
+    )
+
+    assert result.status is ToolExecutionStatus.OK
+    assert calls[0]["confirmation_id"] == confirmation_id
+    assert calls[0]["action_payload_hash"] == snapshot["payloadHash"]
+    assert calls[0]["readback_tool"] == "get_rental_order"
+    assert calls[0]["action_snapshot"] == snapshot
+
+
+@pytest.mark.asyncio
 async def test_unknown_write_is_reconciled_without_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     order_id = str(uuid4())
     snapshot, stored_hash = frozen(

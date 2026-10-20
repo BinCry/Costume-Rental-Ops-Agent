@@ -72,7 +72,7 @@ class AgentToolClient:
             "X-Agent-Tools-Contract": AGENT_TOOLS_CONTRACT_VERSION,
             "X-Case-Branch-Id": branch_id,
         }
-        payload = invocation.model_dump(mode="json", by_alias=True)
+        payload = invocation.model_dump(mode="json", by_alias=True, exclude_none=True)
 
         if self._client is not None:
             return await self._post(self._client, headers, payload)

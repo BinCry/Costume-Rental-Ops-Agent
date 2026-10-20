@@ -218,7 +218,11 @@ class AgentToolExecutionRequest(ApiModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     expected_version: int | None = Field(default=None, ge=1)
     idempotency_key: str = Field(min_length=1, max_length=255)
+    confirmation_id: UUID | None = None
     approval_id: UUID | None = None
+    payload_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    readback_tool: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{1,79}$")
+    action_snapshot: dict[str, Any] | None = None
 
     @field_validator("idempotency_key")
     @classmethod

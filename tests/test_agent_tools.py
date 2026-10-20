@@ -69,6 +69,30 @@ def test_tool_call_model_rejects_arbitrary_route_shape() -> None:
         )
 
 
+def test_tool_call_model_serializes_frozen_confirmation_evidence() -> None:
+    confirmation_id = uuid4()
+    request = AgentToolExecutionRequest(
+        case_id=uuid4(),
+        tool_call_id=uuid4(),
+        tool_name="reallocate_rental_item",
+        arguments={"orderId": str(uuid4())},
+        expected_version=7,
+        idempotency_key="case-1:call-1",
+        confirmation_id=confirmation_id,
+        payload_hash="a" * 64,
+        readback_tool="get_rental_order",
+        action_snapshot={"toolName": "reallocate_rental_item", "payloadHash": "a" * 64},
+    )
+
+    payload = request.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+    assert payload["confirmationId"] == str(confirmation_id)
+    assert payload["payloadHash"] == "a" * 64
+    assert payload["readbackTool"] == "get_rental_order"
+    assert payload["actionSnapshot"]["toolName"] == "reallocate_rental_item"
+    assert "approvalId" not in payload
+
+
 def test_write_proposal_must_match_validated_goal_inputs() -> None:
     trusted_order_id = str(uuid4())
     changed_order_id = str(uuid4())

@@ -78,6 +78,9 @@ async def _call(
     confirmation_id: UUID | None = None,
     approval_id: UUID | None = None,
     payload_hash: str | None = None,
+    action_payload_hash: str | None = None,
+    readback_tool: str | None = None,
+    action_snapshot: dict[str, Any] | None = None,
 ) -> AgentToolExecutionResult:
     case = await get_case(case_id, UUID(actor.user_id))
     if case is None or not case.get("branch_id"):
@@ -102,7 +105,11 @@ async def _call(
         arguments=arguments,
         expected_version=expected_version,
         idempotency_key=idempotency_key,
+        confirmation_id=confirmation_id,
         approval_id=approval_id,
+        payload_hash=action_payload_hash,
+        readback_tool=readback_tool,
+        action_snapshot=action_snapshot,
     )
     try:
         result = await _client().execute(
@@ -270,6 +277,9 @@ async def execute_frozen_action(
                 confirmation_id=confirmation_id,
                 approval_id=approval_id,
                 payload_hash=stored_hash,
+                action_payload_hash=payload_hash,
+                readback_tool=str(snapshot.get("readbackTool") or "") or None,
+                action_snapshot=snapshot,
             )
         except ToolInvocationError as error:
             if error.code != "TOOL_OUTCOME_UNKNOWN":
