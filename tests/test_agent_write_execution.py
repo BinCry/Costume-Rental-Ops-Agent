@@ -215,6 +215,10 @@ async def test_versioned_write_succeeds_only_after_readback(
             observed_at=datetime.now(UTC),
         )
 
+    async def fake_prior(_: object) -> None:
+        return None
+
+    monkeypatch.setattr(execution, "get_tool_call", fake_prior)
     monkeypatch.setattr(execution, "_call", fake_call)
     result = await execution.execute_frozen_action(
         actor=ActorContext(user_id=str(uuid4()), audiences=("staff_internal",)),
@@ -248,6 +252,10 @@ async def test_unknown_write_is_reconciled_without_retry(monkeypatch: pytest.Mon
             observed_at=datetime.now(UTC),
         )
 
+    async def fake_prior(_: object) -> None:
+        return None
+
+    monkeypatch.setattr(execution, "get_tool_call", fake_prior)
     monkeypatch.setattr(execution, "_call", fake_call)
     result = await execution.execute_frozen_action(
         actor=ActorContext(user_id=str(uuid4()), audiences=("staff_internal",)),
