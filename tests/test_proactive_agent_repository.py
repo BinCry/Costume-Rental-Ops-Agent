@@ -413,6 +413,7 @@ def test_finding_refresh_reanalyzes_and_expires_pending_decisions(
         confirmation = connection.execute(
             "SELECT status FROM agent_confirmations WHERE case_id = %s", (case_id,)
         ).fetchone()
+    assert confirmation is not None
     assert case == {
         "state": "ANALYZING",
         "version": claimed["version"] + 1,
@@ -552,6 +553,8 @@ def test_stale_upsert_does_not_overwrite_newer_observation_or_case(
             (case_id,),
         ).fetchone()
         count = connection.execute("SELECT count(*) AS count FROM agent_cases").fetchone()
+    assert finding is not None
+    assert count is not None
     assert finding["evidence"] == {"version": "new"}
     assert finding["source_observed_at"] == observed_at
     assert count["count"] == 1
@@ -603,6 +606,9 @@ def test_resolve_finding_closes_nonterminal_case_and_expires_decisions(
         confirmation = connection.execute(
             "SELECT status FROM agent_confirmations WHERE case_id = %s", (case_id,)
         ).fetchone()
+    assert finding is not None
+    assert case is not None
+    assert confirmation is not None
     assert finding["status"] == "RESOLVED"
     assert finding["resolved_at"] is not None
     assert finding["evidence"]["resolution"]["code"] == "RISK_NO_LONGER_PRESENT"
@@ -681,6 +687,8 @@ def test_newer_idempotent_resolve_advances_watermark_and_blocks_delayed_upsert(
             "SELECT status, source_observed_at, evidence FROM agent_findings WHERE case_id = %s",
             (case_id,),
         ).fetchone()
+    assert counts is not None
+    assert finding is not None
     assert counts["cases"] == 1
     assert finding["status"] == "RESOLVED"
     assert finding["source_observed_at"] == base + timedelta(seconds=4)
@@ -714,6 +722,7 @@ def test_resolve_rejects_executing_case_and_preserves_open_finding(
         finding = connection.execute(
             "SELECT status FROM agent_findings WHERE case_id = %s", (case_id,)
         ).fetchone()
+    assert finding is not None
     assert finding["status"] == "OPEN"
 
 
@@ -786,6 +795,7 @@ def test_resolve_allows_analyzing_case_without_live_run(
     if run_mode == "stale":
         assert run == {"status": "FAILED", "error_code": "RUN_DEADLINE_EXPIRED"}
     else:
+        assert run is not None
         assert run["status"] == "COMPLETED"
 
 
@@ -849,6 +859,7 @@ def test_resolve_finding_does_not_change_terminal_case_state_or_version(
             "SELECT status FROM agent_findings WHERE case_id = %s", (case_id,)
         ).fetchone()
     assert case == {"state": "FAILED", "version": 1}
+    assert finding is not None
     assert finding["status"] == "RESOLVED"
 
 
@@ -873,7 +884,7 @@ def test_concurrent_readiness_confirmation_prepare_is_idempotent_and_rejects_cle
     with ThreadPoolExecutor(max_workers=2) as executor:
         prepared = list(
             executor.map(
-                lambda _: cases._create_readiness_confirmation(**kwargs),
+                lambda _: cases._create_readiness_confirmation(**kwargs),  # type: ignore[arg-type]
                 range(2),
             )
         )
@@ -905,6 +916,9 @@ def test_concurrent_readiness_confirmation_prepare_is_idempotent_and_rejects_cle
             "FROM agent_confirmations WHERE case_id = %s",
             (case_id,),
         ).fetchone()
+    assert case is not None
+    assert finding is not None
+    assert analysis is not None
     assert case["state"] == "PLAN_READY"
     assert finding["status"] == "OPEN"
     assert analysis["status"] == "ACTIVE"
@@ -959,6 +973,7 @@ def test_readiness_confirmation_success_finalizes_case_finding_and_analysis_atom
             """,
             (case_id,),
         ).fetchone()
+    assert row is not None
     assert row["state"] == "SUCCEEDED"
     assert row["completed_at"] is not None
     assert row["finding_status"] == "RESOLVED"

@@ -31,14 +31,16 @@ def test_proactive_case_migration_backfills_legacy_cases_and_is_rerunnable() -> 
         )
         for migration in migrations:
             connection.execute(migration.read_text(encoding="utf-8"), prepare=False)
-        case_id = connection.execute(
+        case_row = connection.execute(
             """
                 INSERT INTO agent_cases (actor_id, audiences, state)
                 VALUES (%s, ARRAY['customer', 'shared'], 'NEW')
                 RETURNING id
                 """,
             (actor_id,),
-        ).fetchone()["id"]
+        ).fetchone()
+        assert case_row is not None
+        case_id = case_row["id"]
 
         migration_sql = proactive.read_text(encoding="utf-8")
         connection.execute(migration_sql, prepare=False)
@@ -93,7 +95,7 @@ def test_finding_observation_migration_backfills_and_is_rerunnable() -> None:
         for migration in migrations:
             connection.execute(migration.read_text(encoding="utf-8"), prepare=False)
         branch_id = uuid4()
-        case_id = connection.execute(
+        case_row = connection.execute(
             """
             INSERT INTO agent_cases
               (audiences, state, origin, case_type, branch_id)
@@ -102,8 +104,10 @@ def test_finding_observation_migration_backfills_and_is_rerunnable() -> None:
             RETURNING id
             """,
             (branch_id,),
-        ).fetchone()["id"]
-        finding_id = connection.execute(
+        ).fetchone()
+        assert case_row is not None
+        case_id = case_row["id"]
+        finding_row = connection.execute(
             """
             INSERT INTO agent_findings
               (case_id, rule_code, rule_version, dedupe_key, branch_id,
@@ -115,7 +119,9 @@ def test_finding_observation_migration_backfills_and_is_rerunnable() -> None:
             RETURNING id
             """,
             (case_id, branch_id, uuid4(), uuid4(), uuid4()),
-        ).fetchone()["id"]
+        ).fetchone()
+        assert finding_row is not None
+        finding_id = finding_row["id"]
 
         migration_sql = observation_migration.read_text(encoding="utf-8")
         connection.execute(migration_sql, prepare=False)
@@ -135,6 +141,8 @@ def test_finding_observation_migration_backfills_and_is_rerunnable() -> None:
             """,
             (schema_name,),
         ).fetchone()
+        assert finding is not None
+        assert nullable is not None
         assert finding["backfilled"] is True
         assert nullable["is_nullable"] == "NO"
         connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema_name)))

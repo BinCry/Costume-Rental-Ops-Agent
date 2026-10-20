@@ -1,3 +1,4 @@
+from typing import Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -17,7 +18,9 @@ BRANCH_ID = "00000000-0000-0000-0000-000000000030"
 AFFECTED_ORDER_ID = "00000000-0000-0000-0000-000000000012"
 
 
-def _inputs(rule_code: str = "ALLOCATED_UNIT_NOT_READY"):
+def _inputs(
+    rule_code: str = "ALLOCATED_UNIT_NOT_READY",
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], str]:
     option_id = f"reallocate:{REPLACEMENT_UNIT_ID}"
     affected_entity_id = (
         CURRENT_UNIT_ID if rule_code == "ALLOCATED_UNIT_NOT_READY" else AFFECTED_ORDER_ID
@@ -66,7 +69,7 @@ def _inputs(rule_code: str = "ALLOCATED_UNIT_NOT_READY"):
     return case, analysis, context, option_id
 
 
-def test_allocated_unit_not_ready_can_prepare_reallocation_without_affected_order():
+def test_allocated_unit_not_ready_can_prepare_reallocation_without_affected_order() -> None:
     case, analysis, context, option_id = _inputs()
 
     selected_option_id, arguments, version = _readiness_action_from_context(
@@ -85,7 +88,7 @@ def test_allocated_unit_not_ready_can_prepare_reallocation_without_affected_orde
     assert version == 7
 
 
-def test_previous_rental_rule_still_requires_matching_affected_order():
+def test_previous_rental_rule_still_requires_matching_affected_order() -> None:
     case, analysis, context, option_id = _inputs("PREVIOUS_RENTAL_NOT_RETURNED")
 
     selected_option_id, _, _ = _readiness_action_from_context(
@@ -98,7 +101,7 @@ def test_previous_rental_rule_still_requires_matching_affected_order():
 
 
 @pytest.mark.parametrize("changed_field", ["rule", "affected_unit"])
-def test_allocated_unit_not_ready_rejects_stale_identity(changed_field: str):
+def test_allocated_unit_not_ready_rejects_stale_identity(changed_field: str) -> None:
     case, analysis, context, _ = _inputs()
     if changed_field == "rule":
         context["ruleCode"] = "PREVIOUS_RENTAL_NOT_RETURNED"

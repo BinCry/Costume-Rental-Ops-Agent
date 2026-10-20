@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from app.agent_tools import routes
+from app.agent_tools.models import AgentCaseState
 from app.config import get_settings
 from app.main import app
 from app.models import (
@@ -191,7 +192,7 @@ async def test_agent_case_queue_delegates_filters_and_trusted_scope(
     assert actor.agent_read_branch_ids == (BRANCH_ID,)
     assert captured["filters"] == {
         "branch_id": BRANCH_ID,
-        "state": routes.AgentCaseState.NEW,
+        "state": AgentCaseState.NEW,
         "ownership": "unassigned",
         "cursor": "cursor-1",
         "limit": 10,

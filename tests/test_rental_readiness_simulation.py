@@ -1,8 +1,10 @@
+from typing import Any
+
 from app.agent_tools.overdue import simulate as simulate_overdue
 from app.agent_tools.readiness import simulate
 
 
-def _context(units: list[dict[str, str]]):
+def _context(units: list[dict[str, str]]) -> dict[str, Any]:
     return {
         "observedAt": "2026-10-17T10:00:00+00:00",
         "primaryOrder": {
@@ -19,7 +21,7 @@ def _context(units: list[dict[str, str]]):
     }
 
 
-def test_simulation_sorts_units_deterministically_and_never_freezes_an_action():
+def test_simulation_sorts_units_deterministically_and_never_freezes_an_action() -> None:
     snapshot, options, recommended, outcome = simulate(
         _context(
             [
@@ -38,7 +40,7 @@ def test_simulation_sorts_units_deterministically_and_never_freezes_an_action():
     assert snapshot["before"]["feasible"] is False
 
 
-def test_simulation_returns_no_feasible_option_without_inventory():
+def test_simulation_returns_no_feasible_option_without_inventory() -> None:
     _, options, recommended, outcome = simulate(_context([]))
 
     assert options == []
@@ -46,7 +48,7 @@ def test_simulation_returns_no_feasible_option_without_inventory():
     assert outcome == "NO_FEASIBLE_OPTION"
 
 
-def test_simulation_supports_allocated_unit_not_ready_without_an_affected_order():
+def test_simulation_supports_allocated_unit_not_ready_without_an_affected_order() -> None:
     context = _context([{"id": "00000000-0000-0000-0000-000000000021", "unitCode": "A-01"}])
     context.update(
         {
@@ -65,7 +67,7 @@ def test_simulation_supports_allocated_unit_not_ready_without_an_affected_order(
     assert snapshot["before"]["reasonCodes"] == ["STATUS_NOT_READY"]
 
 
-def test_preparation_delay_recommends_manual_non_executable_work():
+def test_preparation_delay_recommends_manual_non_executable_work() -> None:
     context = {
         "ruleCode": "ORDER_PREPARATION_DELAYED",
         "observedAt": "2026-10-17T10:00:00+00:00",
@@ -106,7 +108,7 @@ def test_preparation_delay_recommends_manual_non_executable_work():
     assert "actionPreview" not in options[0]
 
 
-def test_overdue_return_escalates_without_creating_an_executable_action():
+def test_overdue_return_escalates_without_creating_an_executable_action() -> None:
     context = {
         "ruleCode": "RENTAL_RETURN_OVERDUE",
         "observedAt": "2026-10-19T12:00:00+00:00",
