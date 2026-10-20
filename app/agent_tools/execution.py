@@ -7,7 +7,7 @@ from hashlib import sha256
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
-from app.agent_tools.cases import finish_tool_call, get_case, start_tool_call
+from app.agent_tools.cases import finish_tool_call, get_case, get_tool_call, start_tool_call
 from app.agent_tools.client import AgentToolClient, ToolInvocationError
 from app.agent_tools.guard import WRITE_TOOL_POLICIES, validate_tool_arguments
 from app.agent_tools.models import (
@@ -138,6 +138,8 @@ def _readback_arguments(
         return "get_payment_by_idempotency_key", {"idempotencyKey": idempotency_key}
     if tool_name == "request_refund":
         return "get_refund_by_idempotency_key", {"idempotencyKey": idempotency_key}
+    if tool_name == "record_overdue_follow_up":
+        return "get_customer_interaction_by_idempotency_key", {"idempotencyKey": idempotency_key}
     return None
 
 
@@ -218,6 +220,15 @@ def _postcondition(snapshot: dict[str, Any], data: dict[str, Any]) -> bool:
             and _same(data.get("paymentId"), arguments.get("paymentId"))
             and _same(data.get("amountVnd"), arguments.get("amountVnd"))
         )
+    if tool_name == "record_overdue_follow_up":
+        return (
+            _same(data.get("orderId"), arguments.get("orderId"))
+            and _same(data.get("channel"), arguments.get("channel"))
+            and _same(data.get("outcome"), arguments.get("outcome"))
+            and _same(data.get("occurredAt"), arguments.get("occurredAt"))
+            and _same(data.get("promisedReturnAt"), arguments.get("promisedReturnAt"))
+            and _same(data.get("nextFollowUpAt"), arguments.get("nextFollowUpAt"))
+        )
     return False
 
 
@@ -236,22 +247,34 @@ async def execute_frozen_action(
     idempotency_key = f"agent:{case_id}:{tool_name}:{payload_hash}"
     write_result: AgentToolExecutionResult | None = None
     write_unknown = False
-    try:
-        write_result = await _call(
-            actor=actor,
-            case_id=case_id,
-            tool_name=tool_name,
-            arguments=snapshot["arguments"],
-            idempotency_key=idempotency_key,
-            expected_version=snapshot.get("expectedVersion"),
-            confirmation_id=confirmation_id,
-            approval_id=approval_id,
-            payload_hash=stored_hash,
-        )
-    except ToolInvocationError as error:
-        if error.code != "TOOL_OUTCOME_UNKNOWN":
-            return WriteExecution(ToolExecutionStatus.DEPENDENCY_UNAVAILABLE, error.message)
-        write_unknown = True
+    tool_call_id = uuid5(NAMESPACE_URL, f"{idempotency_key}:{tool_name}")
+    prior = await get_tool_call(tool_call_id)
+    if prior is not None:
+        # A resumed confirmation must never re-send a non-retry-safe write.
+        # Read-back below is sufficient to prove a previous successful write.
+        if prior["status"] == ToolExecutionStatus.VERSION_CONFLICT.value.upper():
+            return WriteExecution(
+                ToolExecutionStatus.VERSION_CONFLICT,
+                "A prior write attempt was rejected because live data changed",
+            )
+        write_unknown = prior["status"] != ToolExecutionStatus.OK.value.upper()
+    else:
+        try:
+            write_result = await _call(
+                actor=actor,
+                case_id=case_id,
+                tool_name=tool_name,
+                arguments=snapshot["arguments"],
+                idempotency_key=idempotency_key,
+                expected_version=snapshot.get("expectedVersion"),
+                confirmation_id=confirmation_id,
+                approval_id=approval_id,
+                payload_hash=stored_hash,
+            )
+        except ToolInvocationError as error:
+            if error.code != "TOOL_OUTCOME_UNKNOWN":
+                return WriteExecution(ToolExecutionStatus.DEPENDENCY_UNAVAILABLE, error.message)
+            write_unknown = True
     if write_result is not None and write_result.status is not ToolExecutionStatus.OK:
         return WriteExecution(write_result.status, "Studio rejected the write action", write_result)
 

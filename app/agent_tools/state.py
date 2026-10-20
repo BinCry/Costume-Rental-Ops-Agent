@@ -21,6 +21,7 @@ _ALLOWED_TRANSITIONS: Mapping[AgentCaseState, frozenset[AgentCaseState]] = {
     ),
     AgentCaseState.PLAN_READY: frozenset(
         {
+            AgentCaseState.ANALYZING,
             AgentCaseState.EXECUTING,
             AgentCaseState.WAITING_CONFIRMATION,
             AgentCaseState.WAITING_APPROVAL,
@@ -38,13 +39,25 @@ _ALLOWED_TRANSITIONS: Mapping[AgentCaseState, frozenset[AgentCaseState]] = {
         }
     ),
     AgentCaseState.WAITING_CONFIRMATION: frozenset(
-        {AgentCaseState.EXECUTING, AgentCaseState.FAILED, AgentCaseState.CANCELLED}
+        {
+            AgentCaseState.ANALYZING,
+            AgentCaseState.PLAN_READY,
+            AgentCaseState.EXECUTING,
+            AgentCaseState.FAILED,
+            AgentCaseState.CANCELLED,
+        }
     ),
     AgentCaseState.WAITING_APPROVAL: frozenset(
-        {AgentCaseState.EXECUTING, AgentCaseState.FAILED, AgentCaseState.CANCELLED}
+        {
+            AgentCaseState.ANALYZING,
+            AgentCaseState.EXECUTING,
+            AgentCaseState.FAILED,
+            AgentCaseState.CANCELLED,
+        }
     ),
     AgentCaseState.EXECUTING: frozenset(
         {
+            AgentCaseState.ANALYZING,
             AgentCaseState.WAITING_APPROVAL,
             AgentCaseState.MONITORING,
             AgentCaseState.SUCCEEDED,
@@ -54,7 +67,12 @@ _ALLOWED_TRANSITIONS: Mapping[AgentCaseState, frozenset[AgentCaseState]] = {
         }
     ),
     AgentCaseState.MONITORING: frozenset(
-        {AgentCaseState.SUCCEEDED, AgentCaseState.HANDED_OFF, AgentCaseState.FAILED}
+        {
+            AgentCaseState.ANALYZING,
+            AgentCaseState.SUCCEEDED,
+            AgentCaseState.HANDED_OFF,
+            AgentCaseState.FAILED,
+        }
     ),
     AgentCaseState.SUCCEEDED: frozenset(),
     AgentCaseState.INSUFFICIENT_DATA: frozenset(),

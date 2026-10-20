@@ -28,6 +28,34 @@ class AgentCaseState(StrEnum):
     CANCELLED = "CANCELLED"
 
 
+class AgentCaseOrigin(StrEnum):
+    USER = "USER"
+    SYSTEM = "SYSTEM"
+
+
+class AgentCaseType(StrEnum):
+    INTERACTIVE = "INTERACTIVE"
+    RENTAL_READINESS = "RENTAL_READINESS"
+    RENTAL_RETURN = "RENTAL_RETURN"
+    OPERATIONAL_CAPACITY = "OPERATIONAL_CAPACITY"
+
+
+OPERATIONAL_CASE_TYPES = frozenset(
+    {
+        AgentCaseType.RENTAL_READINESS.value,
+        AgentCaseType.RENTAL_RETURN.value,
+        AgentCaseType.OPERATIONAL_CAPACITY.value,
+    }
+)
+
+
+class AgentFindingSeverity(StrEnum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
 class AgentRunStatus(StrEnum):
     RUNNING = "RUNNING"
     PAUSED = "PAUSED"

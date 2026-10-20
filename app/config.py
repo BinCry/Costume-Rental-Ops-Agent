@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     AGENT_STALL_LIMIT: int = Field(default=5, ge=1, le=12)
     AGENT_CONFIRMATION_TTL_MINUTES: int = Field(default=30, ge=1, le=240)
     AGENT_APPROVAL_TTL_HOURS: int = Field(default=24, ge=1, le=168)
+    AGENT_READINESS_ANALYSIS_ENABLED: bool = False
+    AGENT_READINESS_EXECUTION_ENABLED: bool = False
+    AGENT_CRM_WRITE_ENABLED: bool = False
     AI_WEB_ALLOWED_ORIGINS: Annotated[tuple[str, ...], NoDecode] = ("http://localhost:5173",)
 
     @field_validator("GROQ_API_KEY", "GEMINI_API_KEY", "AI_INTERNAL_API_KEY", mode="before")

@@ -12,6 +12,13 @@ MIGRATIONS = (
     ("004_agent_run_budgets_python", "004_agent_run_budgets.sql"),
     ("005_agent_sync_runtime_python", "005_agent_sync_runtime.sql"),
     ("006_agent_case_branch_scope_python", "006_agent_case_branch_scope.sql"),
+    ("007_proactive_agent_cases_python", "006_proactive_agent_cases.sql"),
+    ("008_finding_observation_ordering_python", "007_finding_observation_ordering.sql"),
+    ("009_rental_readiness_analysis_python", "008_rental_readiness_analysis.sql"),
+    ("010_rental_readiness_execution_python", "009_rental_readiness_execution.sql"),
+    ("011_order_preparation_delay_python", "010_order_preparation_delay.sql"),
+    ("012_rental_return_overdue_python", "011_rental_return_overdue.sql"),
+    ("013_operational_capacity_shortfall_python", "012_operational_capacity_shortfall.sql"),
 )
 
 

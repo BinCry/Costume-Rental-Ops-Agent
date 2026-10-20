@@ -258,3 +258,46 @@ async def test_unknown_write_is_reconciled_without_retry(monkeypatch: pytest.Mon
 
     assert result.status is ToolExecutionStatus.OK
     assert calls == ["cancel_rental_order", "get_rental_order"]
+
+
+@pytest.mark.asyncio
+async def test_resumed_write_reads_back_without_resending_prior_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order_id = str(uuid4())
+    item_id = str(uuid4())
+    unit_id = str(uuid4())
+    snapshot, stored_hash = frozen(
+        "reallocate_rental_item",
+        {
+            "orderId": order_id,
+            "orderItemId": item_id,
+            "unitId": unit_id,
+            "reason": "Rental readiness recommendation",
+        },
+        4,
+    )
+    calls: list[str] = []
+
+    async def fake_prior(_: object) -> dict[str, object]:
+        return {"status": "OK", "outcome": {}}
+
+    async def fake_call(**kwargs: Any) -> AgentToolExecutionResult:
+        calls.append(kwargs["tool_name"])
+        return AgentToolExecutionResult(
+            status=ToolExecutionStatus.OK,
+            data={"id": order_id, "items": [{"id": item_id, "unitId": unit_id}]},
+            observed_at=datetime.now(UTC),
+        )
+
+    monkeypatch.setattr(execution, "get_tool_call", fake_prior)
+    monkeypatch.setattr(execution, "_call", fake_call)
+    result = await execution.execute_frozen_action(
+        actor=ActorContext(user_id=str(uuid4()), audiences=("staff_internal",)),
+        case_id=uuid4(),
+        snapshot=snapshot,
+        stored_hash=stored_hash,
+    )
+
+    assert result.status is ToolExecutionStatus.OK
+    assert calls == ["get_rental_order"]

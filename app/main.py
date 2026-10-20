@@ -161,7 +161,13 @@ def custom_openapi() -> dict[str, Any]:
             "/api/v1/knowledge/answer": [{"InternalServiceKey": []}],
             "/api/v1/knowledge/search": [{"InternalServiceKey": []}],
             "/api/v1/agent/messages": [{"InternalServiceKey": []}],
+            "/api/v1/agent/cases": [{"InternalServiceKey": []}],
             "/api/v1/agent/cases/{case_id}": [{"InternalServiceKey": []}],
+            "/api/v1/agent/cases/{case_id}/claim": [{"InternalServiceKey": []}],
+            "/api/v1/agent/cases/{case_id}/release": [{"InternalServiceKey": []}],
+            "/api/v1/agent/internal/findings/upsert": [{"InternalServiceKey": []}],
+            "/api/v1/agent/internal/findings": [{"InternalServiceKey": []}],
+            "/api/v1/agent/internal/findings/resolve": [{"InternalServiceKey": []}],
             "/api/v1/agent/cases/{case_id}/confirmations/{confirmation_id}/confirm": [
                 {"InternalServiceKey": []}
             ],

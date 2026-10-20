@@ -1,32 +1,58 @@
 """Bounded agent turn runtime and persisted case lifecycle."""
 
+import contextlib
 import json
 import logging
+from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
 from uuid import UUID, uuid4
 
 from langgraph.types import Command
 
+from app.agent_tools.capacity import explain as explain_capacity
+from app.agent_tools.capacity import simulate as simulate_capacity
 from app.agent_tools.cases import (
+    AnalysisForbiddenError,
+    AnalysisStaleError,
+    CaseAlreadyClaimedError,
     CaseBusyError,
+    CaseReleaseForbiddenError,
+    CaseVersionConflictError,
+    FindingResolutionConflictError,
+    ReadinessConfirmationError,
     append_turn,
+    begin_readiness_analysis,
+    claim_case,
     create_approval,
     create_case,
     create_confirmation,
+    create_overdue_follow_up_confirmation,
+    create_readiness_confirmation,
     create_run,
     decide_approval,
     decide_confirmation,
+    decide_overdue_follow_up_confirmation,
+    decide_readiness_confirmation,
+    finalize_overdue_follow_up_execution,
+    finalize_readiness_analysis,
+    finalize_readiness_execution,
     get_case,
     get_case_budget_usage,
     get_case_by_id,
-    get_case_overview,
+    get_case_overview_by_id,
     get_pending_approval,
+    list_findings,
+    list_operational_cases,
     mark_run,
     pending_actions,
+    release_case,
+    replan_readiness_execution,
+    resolve_finding,
     set_goal,
     set_goal_status,
     transition_case,
+    upsert_finding,
 )
 from app.agent_tools.client import AgentToolClient, ToolInvocationError
 from app.agent_tools.execution import execute_frozen_action, observe_live_tool
@@ -38,6 +64,7 @@ from app.agent_tools.guard import (
     validate_write_matches_goal,
 )
 from app.agent_tools.models import (
+    OPERATIONAL_CASE_TYPES,
     ActionProposal,
     AgentCaseState,
     AgentGoalSpec,
@@ -45,7 +72,11 @@ from app.agent_tools.models import (
     AgentTerminationReason,
     ToolExecutionStatus,
 )
+from app.agent_tools.overdue import explain as explain_overdue
+from app.agent_tools.overdue import simulate as simulate_overdue
 from app.agent_tools.planner import propose_write_action
+from app.agent_tools.readiness import explain as explain_readiness
+from app.agent_tools.readiness import simulate as simulate_readiness
 from app.agent_tools.state import can_transition
 from app.agent_tools.workflow import WriteWorkflowState, run_write_workflow
 from app.config import get_settings
@@ -53,16 +84,70 @@ from app.errors import AppError
 from app.knowledge.service import answer_knowledge
 from app.models import (
     ActorContext,
+    AgentCaseListData,
     AgentCaseResponse,
     AgentEvidence,
+    AgentFinding,
+    AgentFindingResolveData,
+    AgentFindingResolveInput,
+    AgentFindingUpsertInput,
     AgentGoal,
     AgentHandoff,
+    AgentInternalFinding,
+    AgentInternalFindingListData,
+    AgentOverdueFollowUpConfirmationInput,
+    AgentReadinessAnalysis,
     PendingApproval,
     PendingConfirmation,
 )
 
 logger = logging.getLogger(__name__)
 _MODEL_CALL_TOKEN_RESERVE = 4_096
+
+
+def _actor_uuid(actor: ActorContext) -> UUID:
+    try:
+        return UUID(actor.user_id)
+    except ValueError as error:
+        raise AppError(400, "INVALID_ACTOR_CONTEXT", "Trusted actor context is invalid") from error
+
+
+def _branch_allowed(actor: ActorContext, branch_id: str | None, *, manage: bool) -> bool:
+    if branch_id is None:
+        return False
+    if manage:
+        return actor.agent_manage_all or UUID(branch_id) in actor.agent_manage_branch_ids
+    return (
+        actor.agent_read_all
+        or actor.agent_manage_all
+        or UUID(branch_id) in actor.agent_read_branch_ids
+        or UUID(branch_id) in actor.agent_manage_branch_ids
+    )
+
+
+def _case_access_allowed(
+    actor: ActorContext, case: dict[str, Any], *, manage: bool = False
+) -> bool:
+    owner_id = case.get("owner_actor_id") or case.get("actor_id")
+    if case.get("case_type", "INTERACTIVE") == "INTERACTIVE":
+        return owner_id == actor.user_id
+    if manage and owner_id != actor.user_id:
+        return False
+    return _branch_allowed(actor, case.get("branch_id"), manage=manage)
+
+
+async def _authorized_case(
+    actor: ActorContext, case_id: UUID, *, manage: bool = False
+) -> dict[str, Any]:
+    # Preserve the original owner-scoped lookup for interactive cases. Besides
+    # keeping that security boundary explicit, this also keeps the existing
+    # runtime seam stable for callers/tests that provide an owner case lookup.
+    case = await get_case(case_id, _actor_uuid(actor))
+    if case is None:
+        case = await get_case_by_id(case_id)
+    if case is None or not _case_access_allowed(actor, case, manage=manage):
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    return case
 
 
 def _run_timeout_seconds() -> float:
@@ -89,15 +174,15 @@ async def answer_agent_message(
     case_id: UUID | None,
     branch_id: UUID,
 ) -> AgentCaseResponse:
-    try:
-        actor_id = UUID(actor.user_id)
-    except ValueError as error:
-        raise AppError(400, "INVALID_ACTOR_CONTEXT", "Trusted actor context is invalid") from error
+    actor_id = _actor_uuid(actor)
 
     if case_id is None:
         case = await create_case(actor_id, tuple(actor.audiences), branch_id)
     else:
-        case = _require_case_branch(await get_case(case_id, actor_id), branch_id)
+        case = _require_case_branch(await _authorized_case(actor, case_id, manage=True), branch_id)
+    case_actor = actor.model_copy(
+        update={"audiences": tuple(case.get("audiences", actor.audiences))}
+    )
 
     current = case["state"]
     if current not in {AgentCaseState.NEW, AgentCaseState.WAITING_INPUT}:
@@ -162,7 +247,7 @@ async def answer_agent_message(
     clarification = missing_input_question(goal)
     if "version" in case and write_goal and clarification is None:
         return await _plan_write_confirmation(
-            actor=actor,
+            actor=case_actor,
             case_id=resolved_case_id,
             message=message,
             run_id=run_id,
@@ -175,9 +260,7 @@ async def answer_agent_message(
     graph_turn = None
     if "version" in case:
         remaining_steps = settings.AGENT_MAX_STEPS_PER_CASE - previous_steps
-        remaining_tokens = (
-            settings.AGENT_MAX_TOKENS_PER_CASE - previous_tokens - goal_tokens
-        )
+        remaining_tokens = settings.AGENT_MAX_TOKENS_PER_CASE - previous_tokens - goal_tokens
         if clarification is not None:
             graph_turn = GraphTurn(
                 answer=clarification,
@@ -191,7 +274,7 @@ async def answer_agent_message(
             )
         else:
             graph_turn = await run_graph_turn(
-                actor,
+                case_actor,
                 resolved_case_id,
                 message,
                 branch_id,
@@ -209,12 +292,12 @@ async def answer_agent_message(
                 termination_reason=AgentTerminationReason.DEPENDENCY_FAILURE,
                 goal=goal,
             )
-    knowledge = None if graph_turn is not None else await answer_knowledge(actor, message, top_k=6)
+    knowledge = (
+        None if graph_turn is not None else await answer_knowledge(case_actor, message, top_k=6)
+    )
     graph_termination = graph_turn.termination_reason if graph_turn is not None else None
     rule_termination = (
-        graph_termination
-        if graph_termination is not AgentTerminationReason.GOAL_ACHIEVED
-        else None
+        graph_termination if graph_termination is not AgentTerminationReason.GOAL_ACHIEVED else None
     )
     answered = (
         (
@@ -354,9 +437,7 @@ async def answer_agent_message(
         run_status=run_status.value,
         goal=_public_goal(goal.model_copy(update={"status": goal_status}).model_dump()),
         steps_used=(previous_steps + max(1, graph_turn.tool_calls)) if graph_turn else 1,
-        tokens_used=previous_tokens
-        + goal_tokens
-        + (graph_turn.token_usage if graph_turn else 0),
+        tokens_used=previous_tokens + goal_tokens + (graph_turn.token_usage if graph_turn else 0),
         termination_reason=final_reason.value,
         pending_input=answer if state is AgentCaseState.WAITING_INPUT else None,
         handoff=(
@@ -596,17 +677,19 @@ async def _enrich_write_proposal(
 async def read_agent_case(
     actor: ActorContext, case_id: UUID, branch_id: UUID | None = None
 ) -> AgentCaseResponse:
-    try:
-        actor_id = UUID(actor.user_id)
-    except ValueError as error:
-        raise AppError(400, "INVALID_ACTOR_CONTEXT", "Trusted actor context is invalid") from error
-    case = await get_case_overview(case_id, actor_id)
+    _actor_uuid(actor)
+    await _authorized_case(actor, case_id)
+    case = await get_case_overview_by_id(case_id)
     if case is None:
         raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
     if branch_id is not None:
         _require_case_branch(case, branch_id)
     if not case.get("branch_id"):
         raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    return await _case_response(case_id, case)
+
+
+async def _case_response(case_id: UUID, case: dict[str, Any]) -> AgentCaseResponse:
     terminal = {
         AgentCaseState.SUCCEEDED,
         AgentCaseState.INSUFFICIENT_DATA,
@@ -633,6 +716,11 @@ async def read_agent_case(
                 confirmation_id=UUID(confirmation["id"]),
                 summary=confirmation["summary"],
                 expires_at=confirmation["expires_at"].isoformat(),
+                analysis_id=(
+                    UUID(confirmation["analysis_id"]) if confirmation.get("analysis_id") else None
+                ),
+                option_id=confirmation.get("option_id"),
+                action=confirmation.get("action"),
             )
             if confirmation is not None
             else None
@@ -661,7 +749,733 @@ async def read_agent_case(
             else None
         ),
         completed=case["state"] in terminal,
+        origin=case.get("origin"),
+        case_type=case.get("case_type"),
+        branch_id=UUID(case["branch_id"]) if case.get("branch_id") else None,
+        owner_actor_id=(UUID(case["owner_actor_id"]) if case.get("owner_actor_id") else None),
+        claimed_at=case.get("claimed_at"),
+        deadline_at=case.get("deadline_at"),
+        version=case.get("version"),
+        finding=(AgentFinding.model_validate(case["finding"]) if case.get("finding") else None),
+        analysis=(
+            AgentReadinessAnalysis.model_validate(case["analysis"])
+            if case.get("analysis")
+            else None
+        ),
     )
+
+
+async def list_agent_cases(
+    actor: ActorContext,
+    *,
+    branch_id: UUID | None,
+    state: AgentCaseState | None,
+    ownership: str,
+    cursor: str | None,
+    limit: int,
+) -> AgentCaseListData:
+    actor_id = _actor_uuid(actor)
+    if actor.agent_read_all or actor.agent_manage_all:
+        branch_ids = None
+    else:
+        branch_ids = tuple(
+            dict.fromkeys((*actor.agent_read_branch_ids, *actor.agent_manage_branch_ids))
+        )
+    if branch_id is not None and branch_ids is not None and branch_id not in branch_ids:
+        raise AppError(403, "FORBIDDEN", "Agent case branch is outside the actor scope")
+    try:
+        rows, next_cursor = await list_operational_cases(
+            branch_ids, branch_id, state, ownership, actor_id, cursor, limit
+        )
+    except ValueError as error:
+        raise AppError(400, "INVALID_CURSOR", "Agent case cursor is invalid") from error
+    return AgentCaseListData(
+        items=[await _case_response(UUID(row["id"]), row) for row in rows],
+        next_cursor=next_cursor,
+    )
+
+
+async def claim_agent_case(
+    actor: ActorContext, case_id: UUID, expected_version: int
+) -> AgentCaseResponse:
+    actor_id = _actor_uuid(actor)
+    case = await get_case_by_id(case_id)
+    if case is None or case.get("case_type") not in OPERATIONAL_CASE_TYPES:
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    if not _branch_allowed(actor, case.get("branch_id"), manage=True):
+        raise AppError(403, "FORBIDDEN", "Agent case branch is outside the actor scope")
+    try:
+        await claim_case(case_id, actor_id, expected_version)
+    except CaseVersionConflictError as error:
+        raise AppError(409, "AGENT_CASE_VERSION_CONFLICT", str(error)) from error
+    except CaseAlreadyClaimedError as error:
+        raise AppError(409, "AGENT_CASE_ALREADY_CLAIMED", str(error)) from error
+    except CaseReleaseForbiddenError as error:
+        raise AppError(409, "AGENT_CASE_CLAIM_FORBIDDEN", str(error)) from error
+    overview = await get_case_overview_by_id(case_id)
+    if overview is None:
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    return await _case_response(case_id, overview)
+
+
+async def release_agent_case(
+    actor: ActorContext, case_id: UUID, expected_version: int
+) -> AgentCaseResponse:
+    actor_id = _actor_uuid(actor)
+    await _authorized_case(actor, case_id, manage=True)
+    try:
+        await release_case(case_id, actor_id, expected_version)
+    except CaseVersionConflictError as error:
+        raise AppError(409, "AGENT_CASE_VERSION_CONFLICT", str(error)) from error
+    except CaseAlreadyClaimedError as error:
+        raise AppError(409, "AGENT_CASE_NOT_OWNER", str(error)) from error
+    except CaseReleaseForbiddenError as error:
+        raise AppError(409, "AGENT_CASE_RELEASE_FORBIDDEN", str(error)) from error
+    overview = await get_case_overview_by_id(case_id)
+    if overview is None:
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    return await _case_response(case_id, overview)
+
+
+def _readiness_context_arguments(finding: dict[str, Any]) -> dict[str, object]:
+    rule_code = str(finding.get("rule_code") or "")
+    arguments: dict[str, object] = {
+        "ruleCode": rule_code,
+        "primaryOrderId": str(finding["primary_entity_id"]),
+    }
+    if finding.get("unit_id") is not None:
+        arguments["unitId"] = str(finding["unit_id"])
+    if rule_code == "PREVIOUS_RENTAL_NOT_RETURNED":
+        arguments["affectedOrderId"] = str(finding["affected_entity_id"])
+    return arguments
+
+
+async def analyze_agent_case(
+    actor: ActorContext, case_id: UUID, expected_version: int
+) -> AgentCaseResponse:
+    """Create a non-executable operational recommendation from a fresh live snapshot."""
+    if not get_settings().AGENT_READINESS_ANALYSIS_ENABLED:
+        raise AppError(
+            503,
+            "AGENT_READINESS_ANALYSIS_DISABLED",
+            "Rental readiness analysis is disabled",
+        )
+    actor_id = _actor_uuid(actor)
+    case = await _authorized_case(actor, case_id, manage=True)
+    if case.get("case_type") not in OPERATIONAL_CASE_TYPES:
+        raise AppError(409, "AGENT_ANALYSIS_NOT_SUPPORTED", "Case is not an operational case")
+    try:
+        started = await begin_readiness_analysis(case_id, actor_id, expected_version)
+    except CaseVersionConflictError as error:
+        raise AppError(409, "AGENT_CASE_VERSION_CONFLICT", str(error)) from error
+    except AnalysisForbiddenError as error:
+        message = str(error)
+        code = (
+            "AGENT_CASE_NOT_CLAIMED"
+            if "claimed" in message
+            else "AGENT_FINDING_NOT_OPEN"
+            if "finding" in message
+            else "AGENT_ANALYSIS_NOT_SUPPORTED"
+        )
+        raise AppError(409, code, str(error)) from error
+    except LookupError as error:
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", str(error)) from error
+
+    try:
+        rule_code = started["rule_code"]
+        if rule_code == "RENTAL_RETURN_OVERDUE":
+            run_purpose = "rental-return-overdue-analysis"
+        elif rule_code == "OPERATIONAL_CAPACITY_SHORTFALL":
+            run_purpose = "operational-capacity-analysis"
+        else:
+            run_purpose = "rental-readiness-analysis"
+        run_id = await create_run(case_id, run_purpose, _run_timeout_seconds())
+    except CaseBusyError as error:
+        raise AppError(409, "AGENT_CASE_BUSY", str(error)) from error
+    try:
+        overdue_analysis = started["rule_code"] == "RENTAL_RETURN_OVERDUE"
+        capacity_analysis = started["rule_code"] == "OPERATIONAL_CAPACITY_SHORTFALL"
+        context_arguments: dict[str, object]
+        if overdue_analysis:
+            context_tool = "get_overdue_rental_context"
+            context_arguments = {"orderId": str(started["primary_entity_id"])}
+            analysis_purpose = "rental-return-overdue-analysis"
+        elif capacity_analysis:
+            context_tool = "get_operational_capacity_context"
+            context_arguments = {
+                "branchId": str(started["primary_entity_id"]),
+                "startsAt": started["window_start"].isoformat(),
+                "endsAt": started["window_end"].isoformat(),
+            }
+            analysis_purpose = "operational-capacity-analysis"
+        else:
+            context_tool = "get_rental_readiness_context"
+            context_arguments = _readiness_context_arguments(started)
+            analysis_purpose = "rental-readiness-analysis"
+        result = await observe_live_tool(
+            actor,
+            case_id,
+            context_tool,
+            context_arguments,
+            analysis_purpose,
+        )
+        if result.status is not ToolExecutionStatus.OK or not isinstance(result.data, dict):
+            raise ToolInvocationError(
+                "TOOL_DEPENDENCY_UNAVAILABLE", "Readiness context is unavailable"
+            )
+        context = result.data
+        observed_at = context.get("observedAt")
+        if not isinstance(observed_at, str):
+            raise ToolInvocationError(
+                "TOOL_PROTOCOL_ERROR", "Readiness context is missing observedAt"
+            )
+        if context.get("riskStillPresent") is not True:
+            # A read-only snapshot can prove the detector's finding obsolete.
+            # Release the run before the existing resolve contract takes locks.
+            await mark_run(run_id, AgentRunStatus.COMPLETED, step_count=1)
+            await resolve_finding(
+                {
+                    "dedupe_key": started["dedupe_key"],
+                    "rule_code": started["rule_code"],
+                    "observed_at": datetime.fromisoformat(observed_at.replace("Z", "+00:00")),
+                    "resolution_code": "RISK_NO_LONGER_PRESENT",
+                    "evidence": {"source": context_tool},
+                }
+            )
+            overview = await get_case_overview_by_id(case_id)
+            if overview is None:
+                raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+            return await _case_response(case_id, overview)
+
+        if overdue_analysis:
+            simulator = simulate_overdue
+            explainer = explain_overdue
+        elif capacity_analysis:
+            simulator = simulate_capacity
+            explainer = explain_capacity
+        else:
+            simulator = simulate_readiness
+            explainer = explain_readiness
+        snapshot, options, recommended_option_id, outcome = simulator(context)
+        narrative = await explainer(
+            snapshot=snapshot,
+            options=options,
+            recommended_option_id=recommended_option_id,
+        )
+        await finalize_readiness_analysis(
+            case_id=case_id,
+            actor_id=actor_id,
+            case_version_at_start=started["case_version"],
+            finding_id=started["finding_id"],
+            finding_source_observed_at=started["source_observed_at"],
+            snapshot=snapshot,
+            options=options,
+            recommended_option_id=recommended_option_id,
+            outcome=outcome,
+            narrative=narrative.model_dump(by_alias=True),
+            simulator_version=(
+                "rental-return-overdue/v1"
+                if overdue_analysis
+                else "operational-capacity/v1"
+                if capacity_analysis
+                else "rental-readiness/v1"
+            ),
+            ranking_policy_version=(
+                "overdue-response/v1"
+                if overdue_analysis
+                else "capacity-response/v1"
+                if capacity_analysis
+                else "same-branch/v1"
+            ),
+        )
+        answer = narrative.summary
+        await append_turn(
+            case_id,
+            (
+                "Analyze overdue rental return finding"
+                if overdue_analysis
+                else "Analyze operational capacity finding"
+                if capacity_analysis
+                else "Analyze rental readiness finding"
+            ),
+            answer,
+            [
+                {
+                    "source_type": "live_tool",
+                    "source_id": context_tool,
+                    "citation": None,
+                    "observed_at": observed_at,
+                    "payload": {"purpose": analysis_purpose.replace("-", "_")},
+                }
+            ],
+            analysis_purpose.replace("-", "_"),
+            "COMPLETED",
+            answer,
+        )
+        await mark_run(run_id, AgentRunStatus.COMPLETED, step_count=1)
+    except AnalysisStaleError as error:
+        await mark_run(run_id, AgentRunStatus.FAILED, "AGENT_ANALYSIS_STALE", step_count=1)
+        raise AppError(409, "AGENT_ANALYSIS_STALE", str(error)) from error
+    except ToolInvocationError as error:
+        await mark_run(run_id, AgentRunStatus.FAILED, error.code, step_count=1)
+        raise AppError(503, "AGENT_ANALYSIS_DEPENDENCY_FAILURE", error.message) from error
+    except Exception:
+        await mark_run(run_id, AgentRunStatus.FAILED, "AGENT_ANALYSIS_FAILED", step_count=1)
+        raise
+    overview = await get_case_overview_by_id(case_id)
+    if overview is None:
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    return await _case_response(case_id, overview)
+
+
+def _readiness_action_from_context(
+    *, case: dict[str, Any], analysis: dict[str, Any], context: dict[str, Any]
+) -> tuple[str, dict[str, object], int]:
+    option_id = analysis.get("recommended_option_id")
+    options = analysis.get("options")
+    if not isinstance(option_id, str) or not isinstance(options, list):
+        raise AppError(409, "AGENT_RECOMMENDATION_NOT_EXECUTABLE", "No recommendation is available")
+    option = next(
+        (item for item in options if isinstance(item, dict) and item.get("optionId") == option_id),
+        None,
+    )
+    if not isinstance(option, dict) or option.get("optionType") != "REALLOCATE_SAME_BRANCH":
+        raise AppError(
+            409, "AGENT_RECOMMENDATION_NOT_EXECUTABLE", "Recommendation is not executable"
+        )
+    target = option.get("targetUnit")
+    preview = option.get("actionPreview")
+    primary = context.get("primaryOrder")
+    affected = context.get("affectedOrder")
+    current = context.get("currentUnit")
+    finding = case.get("finding")
+    if (
+        not isinstance(target, dict)
+        or not isinstance(preview, dict)
+        or not isinstance(primary, dict)
+        or not isinstance(current, dict)
+        or not isinstance(finding, dict)
+    ):
+        raise AppError(409, "AGENT_RECOMMENDATION_STALE", "Readiness context is incomplete")
+    rule_code = finding.get("rule_code")
+    if context.get("ruleCode") != rule_code:
+        raise AppError(409, "AGENT_RECOMMENDATION_STALE", "Readiness rule changed")
+    if rule_code == "PREVIOUS_RENTAL_NOT_RETURNED":
+        if not isinstance(affected, dict) or affected.get("id") != finding.get(
+            "affected_entity_id"
+        ):
+            raise AppError(409, "AGENT_RECOMMENDATION_STALE", "Affected rental changed")
+    elif rule_code == "ALLOCATED_UNIT_NOT_READY":
+        if affected is not None or current.get("id") != finding.get("affected_entity_id"):
+            raise AppError(409, "AGENT_RECOMMENDATION_STALE", "Affected unit changed")
+    else:
+        raise AppError(409, "AGENT_RECOMMENDATION_STALE", "Readiness rule is unsupported")
+    arguments = preview.get("arguments")
+    if not isinstance(arguments, dict):
+        raise AppError(409, "AGENT_RECOMMENDATION_STALE", "Recommendation preview is invalid")
+    # The recommendation is tied to the exact order/item/current unit that was
+    # simulated. A new version must be analyzed again rather than silently
+    # reusing the old ranking.
+    if (
+        primary.get("id") != arguments.get("orderId")
+        or primary.get("item", {}).get("id") != arguments.get("orderItemId")
+        or primary.get("version") != preview.get("expectedVersion")
+        or current.get("id") != finding.get("unit_id")
+        or primary.get("pickupBranchId") != case.get("branch_id")
+    ):
+        raise AppError(409, "AGENT_RECOMMENDATION_STALE", "Recommendation inputs changed")
+    target_id = target.get("id")
+    replacement_ids = {
+        item.get("id")
+        for item in context.get("replacementUnits", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    if not isinstance(target_id, str) or target_id not in replacement_ids:
+        raise AppError(409, "AGENT_RECOMMENDATION_STALE", "Replacement unit is no longer available")
+    version = primary.get("version")
+    if not isinstance(version, int) or version < 1:
+        raise AppError(409, "AGENT_RECOMMENDATION_STALE", "Primary order version is invalid")
+    return (
+        option_id,
+        {
+            "orderId": str(primary["id"]),
+            "orderItemId": str(primary["item"]["id"]),
+            "unitId": target_id,
+            "reason": "Rental readiness recommendation",
+        },
+        version,
+    )
+
+
+async def prepare_readiness_confirmation(
+    actor: ActorContext, case_id: UUID, analysis_id: UUID, expected_version: int
+) -> AgentCaseResponse:
+    """Revalidate the deterministic recommendation and freeze a write snapshot."""
+    settings = get_settings()
+    if not settings.AGENT_READINESS_EXECUTION_ENABLED:
+        raise AppError(
+            503,
+            "AGENT_READINESS_EXECUTION_DISABLED",
+            "Rental readiness execution is disabled",
+        )
+    actor_id = _actor_uuid(actor)
+    case = await _authorized_case(actor, case_id, manage=True)
+    if case.get("case_type") in {"RENTAL_RETURN", "OPERATIONAL_CAPACITY"}:
+        raise AppError(
+            409,
+            "AGENT_RECOMMENDATION_NOT_EXECUTABLE",
+            "This operational guidance cannot be prepared for execution",
+        )
+    if case.get("case_type") != "RENTAL_READINESS":
+        raise AppError(409, "AGENT_RECOMMENDATION_NOT_READY", "Case is not a rental readiness case")
+    if case["state"] is AgentCaseState.WAITING_CONFIRMATION:
+        pending = await pending_actions(case_id)
+        confirmation = pending.get("confirmation")
+        if (
+            confirmation is not None
+            and confirmation.get("analysis_id") == str(analysis_id)
+            and confirmation.get("prepared_from_case_version") == expected_version
+        ):
+            overview = await get_case_overview_by_id(case_id)
+            if overview is None:
+                raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+            return await _case_response(case_id, overview)
+    if case["state"] is not AgentCaseState.PLAN_READY:
+        raise AppError(409, "AGENT_RECOMMENDATION_NOT_READY", "Case is not ready for confirmation")
+    if int(case.get("version") or 0) != expected_version:
+        raise AppError(409, "AGENT_CASE_VERSION_CONFLICT", "Agent case version is stale")
+    overview = await get_case_overview_by_id(case_id)
+    if overview is None or not isinstance(overview.get("analysis"), dict):
+        raise AppError(409, "AGENT_RECOMMENDATION_NOT_READY", "Active analysis is missing")
+    analysis = overview["analysis"]
+    if str(analysis.get("analysis_id")) != str(analysis_id):
+        raise AppError(
+            409, "AGENT_RECOMMENDATION_NOT_READY", "Analysis is not active for this case"
+        )
+    finding = overview.get("finding")
+    if not isinstance(finding, dict) or finding.get("status") != "OPEN":
+        raise AppError(409, "AGENT_FINDING_NOT_OPEN", "Agent finding is not open")
+    try:
+        run_id = await create_run(case_id, "rental-readiness-confirmation", _run_timeout_seconds())
+    except CaseBusyError as error:
+        raise AppError(409, "AGENT_CASE_BUSY", str(error)) from error
+    try:
+        context_result = await observe_live_tool(
+            actor,
+            case_id,
+            "get_rental_readiness_context",
+            _readiness_context_arguments(finding),
+            "rental-readiness-confirmation",
+        )
+        if context_result.status is not ToolExecutionStatus.OK or not isinstance(
+            context_result.data, dict
+        ):
+            raise ToolInvocationError(
+                "TOOL_DEPENDENCY_UNAVAILABLE", "Readiness context is unavailable"
+            )
+        context = context_result.data
+        observed_at = context.get("observedAt")
+        if not isinstance(observed_at, str):
+            raise ToolInvocationError(
+                "TOOL_PROTOCOL_ERROR", "Readiness context is missing observedAt"
+            )
+        if context.get("riskStillPresent") is not True:
+            await mark_run(run_id, AgentRunStatus.COMPLETED, step_count=1)
+            await resolve_finding(
+                {
+                    "dedupe_key": finding["dedupe_key"],
+                    "rule_code": finding["rule_code"],
+                    "observed_at": datetime.fromisoformat(observed_at.replace("Z", "+00:00")),
+                    "resolution_code": "RISK_NO_LONGER_PRESENT",
+                    "evidence": {"source": "get_rental_readiness_context"},
+                }
+            )
+            resolved = await get_case_overview_by_id(case_id)
+            if resolved is None:
+                raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+            return await _case_response(case_id, resolved)
+        option_id, arguments, order_version = _readiness_action_from_context(
+            case=overview, analysis=analysis, context=context
+        )
+        frozen = _freeze_action("reallocate_rental_item", arguments, order_version)
+        frozen["recommendation"] = {
+            "analysisId": str(analysis_id),
+            "optionId": option_id,
+            "findingId": finding["finding_id"],
+            "findingSourceObservedAt": analysis["source_observed_at"],
+        }
+        unsigned = {key: value for key, value in frozen.items() if key != "payloadHash"}
+        frozen["payloadHash"] = sha256(
+            json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        confirmation = await create_readiness_confirmation(
+            case_id=case_id,
+            actor_id=actor_id,
+            analysis_id=analysis_id,
+            option_id=option_id,
+            expected_version=expected_version,
+            summary="Xác nhận đổi unit theo phương án sẵn sàng thuê đã đề xuất",
+            action_snapshot=frozen,
+            ttl_minutes=settings.AGENT_CONFIRMATION_TTL_MINUTES,
+        )
+        await append_turn(
+            case_id,
+            "Prepare rental readiness confirmation",
+            confirmation["summary"],
+            [
+                {
+                    "source_type": "live_tool",
+                    "source_id": "get_rental_readiness_context",
+                    "citation": None,
+                    "observed_at": observed_at,
+                    "payload": {"purpose": "rental_readiness_confirmation"},
+                }
+            ],
+            "rental_readiness_confirmation",
+            "PAUSED",
+            confirmation["summary"],
+        )
+        await mark_run(run_id, AgentRunStatus.PAUSED, step_count=1)
+    except AppError as error:
+        if error.code == "AGENT_RECOMMENDATION_STALE":
+            with contextlib.suppress(CaseVersionConflictError, AnalysisForbiddenError):
+                await begin_readiness_analysis(case_id, actor_id, expected_version)
+        await mark_run(run_id, AgentRunStatus.FAILED, error.code, step_count=1)
+        raise
+    except CaseVersionConflictError as error:
+        await mark_run(run_id, AgentRunStatus.FAILED, "AGENT_CASE_VERSION_CONFLICT", step_count=1)
+        raise AppError(409, "AGENT_CASE_VERSION_CONFLICT", str(error)) from error
+    except ReadinessConfirmationError as error:
+        await mark_run(
+            run_id, AgentRunStatus.FAILED, "AGENT_RECOMMENDATION_NOT_READY", step_count=1
+        )
+        raise AppError(409, "AGENT_RECOMMENDATION_NOT_READY", str(error)) from error
+    except ToolInvocationError as error:
+        await mark_run(run_id, AgentRunStatus.FAILED, error.code, step_count=1)
+        raise AppError(
+            503, "AGENT_READINESS_EXECUTION_DEPENDENCY_FAILURE", error.message
+        ) from error
+    except Exception:
+        await mark_run(
+            run_id, AgentRunStatus.FAILED, "AGENT_CONFIRMATION_PREPARE_FAILED", step_count=1
+        )
+        raise
+    refreshed = await get_case_overview_by_id(case_id)
+    if refreshed is None:
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    return await _case_response(case_id, refreshed)
+
+
+async def prepare_overdue_follow_up_confirmation(
+    actor: ActorContext,
+    case_id: UUID,
+    body: AgentOverdueFollowUpConfirmationInput,
+) -> AgentCaseResponse:
+    """Freeze one structured, PII-free CRM follow-up record after live revalidation."""
+    settings = get_settings()
+    if not settings.AGENT_CRM_WRITE_ENABLED:
+        raise AppError(
+            503,
+            "AGENT_CRM_WRITE_DISABLED",
+            "CRM write execution is disabled",
+        )
+    actor_id = _actor_uuid(actor)
+    case = await _authorized_case(actor, case_id, manage=True)
+    if case.get("case_type") != "RENTAL_RETURN":
+        raise AppError(409, "AGENT_OVERDUE_FOLLOW_UP_NOT_SUPPORTED", "Case is not overdue-return")
+    option_signature = sha256(
+        json.dumps(
+            body.model_dump(mode="json", exclude={"analysis_id", "expected_version"}),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()[:24]
+    option_id = f"record-overdue-follow-up:{option_signature}"
+    if case["state"] is AgentCaseState.WAITING_CONFIRMATION:
+        pending = await pending_actions(case_id)
+        confirmation = pending.get("confirmation")
+        if (
+            confirmation is not None
+            and confirmation.get("analysis_id") == str(body.analysis_id)
+            and confirmation.get("option_id") == option_id
+            and confirmation.get("prepared_from_case_version") == body.expected_version
+        ):
+            overview = await get_case_overview_by_id(case_id)
+            if overview is None:
+                raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+            return await _case_response(case_id, overview)
+    if case["state"] is not AgentCaseState.PLAN_READY:
+        raise AppError(409, "AGENT_RECOMMENDATION_NOT_READY", "Case is not ready for confirmation")
+    if int(case.get("version") or 0) != body.expected_version:
+        raise AppError(409, "AGENT_CASE_VERSION_CONFLICT", "Agent case version is stale")
+    overview = await get_case_overview_by_id(case_id)
+    if overview is None or not isinstance(overview.get("analysis"), dict):
+        raise AppError(409, "AGENT_RECOMMENDATION_NOT_READY", "Active analysis is missing")
+    analysis = overview["analysis"]
+    if str(analysis.get("analysis_id")) != str(body.analysis_id):
+        raise AppError(409, "AGENT_RECOMMENDATION_NOT_READY", "Analysis is not active")
+    finding = overview.get("finding")
+    if (
+        not isinstance(finding, dict)
+        or finding.get("status") != "OPEN"
+        or finding.get("rule_code") != "RENTAL_RETURN_OVERDUE"
+    ):
+        raise AppError(409, "AGENT_FINDING_NOT_OPEN", "Overdue-return finding is not open")
+    try:
+        run_id = await create_run(case_id, "overdue-follow-up-confirmation", _run_timeout_seconds())
+    except CaseBusyError as error:
+        raise AppError(409, "AGENT_CASE_BUSY", str(error)) from error
+    try:
+        context_result = await observe_live_tool(
+            actor,
+            case_id,
+            "get_overdue_rental_context",
+            {"orderId": str(finding["primary_entity_id"])},
+            "overdue-follow-up-confirmation",
+        )
+        if context_result.status is not ToolExecutionStatus.OK or not isinstance(
+            context_result.data, dict
+        ):
+            raise ToolInvocationError(
+                "TOOL_DEPENDENCY_UNAVAILABLE", "Overdue context is unavailable"
+            )
+        context = context_result.data
+        observed_at = context.get("observedAt")
+        if not isinstance(observed_at, str):
+            raise ToolInvocationError(
+                "TOOL_PROTOCOL_ERROR", "Overdue context is missing observedAt"
+            )
+        if context.get("riskStillPresent") is not True:
+            await mark_run(run_id, AgentRunStatus.COMPLETED, step_count=1)
+            await resolve_finding(
+                {
+                    "dedupe_key": finding["dedupe_key"],
+                    "rule_code": finding["rule_code"],
+                    "observed_at": datetime.fromisoformat(observed_at.replace("Z", "+00:00")),
+                    "resolution_code": "RISK_NO_LONGER_PRESENT",
+                    "evidence": {"source": "get_overdue_rental_context"},
+                }
+            )
+            resolved = await get_case_overview_by_id(case_id)
+            if resolved is None:
+                raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+            return await _case_response(case_id, resolved)
+        primary = context.get("primaryOrder")
+        if (
+            context.get("ruleCode") != "RENTAL_RETURN_OVERDUE"
+            or not isinstance(primary, dict)
+            or primary.get("id") != finding.get("primary_entity_id")
+            or primary.get("pickupBranchId") != overview.get("branch_id")
+        ):
+            raise AppError(409, "AGENT_RECOMMENDATION_STALE", "Overdue context changed")
+        arguments: dict[str, object] = {
+            "orderId": str(primary["id"]),
+            "channel": body.channel,
+            "outcome": body.outcome,
+            "occurredAt": body.occurred_at.isoformat(),
+        }
+        if body.promised_return_at is not None:
+            arguments["promisedReturnAt"] = body.promised_return_at.isoformat()
+        if body.next_follow_up_at is not None:
+            arguments["nextFollowUpAt"] = body.next_follow_up_at.isoformat()
+        frozen = _freeze_action("record_overdue_follow_up", arguments, None)
+        frozen["recommendation"] = {
+            "analysisId": str(body.analysis_id),
+            "findingId": finding["finding_id"],
+            "findingSourceObservedAt": analysis["source_observed_at"],
+        }
+        unsigned = {key: value for key, value in frozen.items() if key != "payloadHash"}
+        frozen["payloadHash"] = sha256(
+            json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        summary = f"Record overdue follow-up outcome: {body.outcome} via {body.channel}"
+        confirmation = await create_overdue_follow_up_confirmation(
+            case_id=case_id,
+            actor_id=actor_id,
+            analysis_id=body.analysis_id,
+            option_id=option_id,
+            expected_version=body.expected_version,
+            summary=summary,
+            action_snapshot=frozen,
+            ttl_minutes=settings.AGENT_CONFIRMATION_TTL_MINUTES,
+        )
+        await append_turn(
+            case_id,
+            "Prepare overdue follow-up confirmation",
+            confirmation["summary"],
+            [
+                {
+                    "source_type": "live_tool",
+                    "source_id": "get_overdue_rental_context",
+                    "citation": None,
+                    "observed_at": observed_at,
+                    "payload": {"purpose": "overdue_follow_up_confirmation"},
+                }
+            ],
+            "overdue_follow_up_confirmation",
+            "PAUSED",
+            confirmation["summary"],
+        )
+        await mark_run(run_id, AgentRunStatus.PAUSED, step_count=1)
+    except AppError as error:
+        await mark_run(run_id, AgentRunStatus.FAILED, error.code, step_count=1)
+        raise
+    except CaseVersionConflictError as error:
+        await mark_run(run_id, AgentRunStatus.FAILED, "AGENT_CASE_VERSION_CONFLICT", step_count=1)
+        raise AppError(409, "AGENT_CASE_VERSION_CONFLICT", str(error)) from error
+    except ReadinessConfirmationError as error:
+        await mark_run(
+            run_id, AgentRunStatus.FAILED, "AGENT_RECOMMENDATION_NOT_READY", step_count=1
+        )
+        raise AppError(409, "AGENT_RECOMMENDATION_NOT_READY", str(error)) from error
+    except ToolInvocationError as error:
+        await mark_run(run_id, AgentRunStatus.FAILED, error.code, step_count=1)
+        raise AppError(
+            503, "AGENT_READINESS_EXECUTION_DEPENDENCY_FAILURE", error.message
+        ) from error
+    except Exception:
+        await mark_run(
+            run_id, AgentRunStatus.FAILED, "AGENT_CONFIRMATION_PREPARE_FAILED", step_count=1
+        )
+        raise
+    refreshed = await get_case_overview_by_id(case_id)
+    if refreshed is None:
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    return await _case_response(case_id, refreshed)
+
+
+async def upsert_agent_finding(body: AgentFindingUpsertInput) -> AgentCaseResponse:
+    if body.window_start >= body.window_end:
+        raise AppError(400, "INVALID_FINDING_WINDOW", "Finding window must be increasing")
+    case_id = await upsert_finding(body.model_dump())
+    overview = await get_case_overview_by_id(case_id)
+    if overview is None:
+        raise AppError(500, "AGENT_CASE_PERSISTENCE_ERROR", "Agent case could not be read")
+    return await _case_response(case_id, overview)
+
+
+async def list_agent_findings(
+    *, rule_code: str, status: str, cursor: str | None, limit: int
+) -> AgentInternalFindingListData:
+    try:
+        rows, next_cursor = await list_findings(rule_code, status, cursor, limit)
+    except ValueError as error:
+        raise AppError(400, "INVALID_CURSOR", "Agent finding cursor is invalid") from error
+    return AgentInternalFindingListData(
+        items=[AgentInternalFinding.model_validate(row) for row in rows],
+        next_cursor=next_cursor,
+    )
+
+
+async def resolve_agent_finding(body: AgentFindingResolveInput) -> AgentFindingResolveData:
+    try:
+        result = await resolve_finding(body.model_dump())
+    except LookupError as error:
+        raise AppError(404, "AGENT_FINDING_NOT_FOUND", str(error)) from error
+    except FindingResolutionConflictError as error:
+        raise AppError(409, "AGENT_FINDING_RESOLUTION_CONFLICT", str(error)) from error
+    return AgentFindingResolveData.model_validate(result)
 
 
 def _public_goal(goal: object) -> AgentGoal | None:
@@ -1093,6 +1907,207 @@ async def _apply_approval_workflow(state: WriteWorkflowState) -> dict[str, Any]:
     return {"next_gate": "done", "workflow_status": workflow_status}
 
 
+async def _decide_readiness_confirmation_runtime(
+    *,
+    actor: ActorContext,
+    case_id: UUID,
+    confirmation_id: UUID,
+    approve: bool,
+    reason: str | None,
+) -> AgentCaseResponse:
+    actor_id = _actor_uuid(actor)
+    decided = await decide_readiness_confirmation(
+        case_id=case_id,
+        confirmation_id=confirmation_id,
+        actor_id=actor_id,
+        approve=approve,
+        reason=reason,
+    )
+    if not approve:
+        overview = await get_case_overview_by_id(case_id)
+        if overview is None:
+            raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+        return await _case_response(case_id, overview)
+    if decided["idempotent"] and decided["state"] in {
+        AgentCaseState.SUCCEEDED.value,
+        AgentCaseState.MONITORING.value,
+    }:
+        overview = await get_case_overview_by_id(case_id)
+        if overview is None:
+            raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+        return await _case_response(case_id, overview)
+    try:
+        run_id = await create_run(case_id, "rental-readiness-execution", _run_timeout_seconds())
+    except CaseBusyError as error:
+        raise AppError(409, "AGENT_CASE_BUSY", str(error)) from error
+    snapshot = decided["action_snapshot"]
+    if not isinstance(snapshot, dict):
+        await mark_run(run_id, AgentRunStatus.FAILED, "STALE_ACTION_SNAPSHOT", step_count=1)
+        raise AppError(409, "STALE_ACTION_SNAPSHOT", "Frozen action is invalid")
+    try:
+        execution = await execute_frozen_action(
+            actor=actor,
+            case_id=case_id,
+            snapshot=snapshot,
+            stored_hash=str(decided["payload_hash"]),
+            confirmation_id=confirmation_id,
+        )
+        if execution.status is ToolExecutionStatus.OK:
+            observed_at = (
+                execution.readback_result.observed_at
+                if execution.readback_result is not None and execution.readback_result.observed_at
+                else datetime.now(UTC)
+            )
+            await finalize_readiness_execution(
+                case_id=case_id,
+                actor_id=actor_id,
+                confirmation_id=confirmation_id,
+                observed_at=observed_at,
+                evidence={
+                    "toolName": snapshot.get("toolName"),
+                    "readbackSource": "get_rental_order",
+                },
+            )
+            await _append_execution_turn(
+                case_id=case_id,
+                prompt="Readiness recommendation confirmed",
+                execution=execution,
+                step_type="rental_readiness_execution",
+            )
+            await mark_run(run_id, AgentRunStatus.COMPLETED, step_count=2)
+        elif execution.status is ToolExecutionStatus.VERSION_CONFLICT:
+            await replan_readiness_execution(case_id, actor_id)
+            await _append_execution_turn(
+                case_id=case_id,
+                prompt="Readiness recommendation conflicted",
+                execution=execution,
+                step_type="rental_readiness_execution",
+            )
+            await mark_run(
+                run_id, AgentRunStatus.COMPLETED, "AGENT_RECOMMENDATION_STALE", step_count=2
+            )
+            raise AppError(
+                409,
+                "AGENT_RECOMMENDATION_STALE",
+                "Live rental data changed; analyze the case again",
+            )
+        elif execution.status is ToolExecutionStatus.UNKNOWN_OUTCOME:
+            await transition_case(case_id, actor_id, AgentCaseState.MONITORING)
+            await _append_execution_turn(
+                case_id=case_id,
+                prompt="Readiness write outcome is unknown",
+                execution=execution,
+                step_type="rental_readiness_execution",
+            )
+            await mark_run(run_id, AgentRunStatus.COMPLETED, "TOOL_OUTCOME_UNKNOWN", step_count=2)
+        else:
+            await replan_readiness_execution(case_id, actor_id)
+            await _append_execution_turn(
+                case_id=case_id,
+                prompt="Readiness write could not be completed",
+                execution=execution,
+                step_type="rental_readiness_execution",
+            )
+            await mark_run(run_id, AgentRunStatus.COMPLETED, execution.status.value, step_count=2)
+    except AppError:
+        raise
+    except Exception:
+        await mark_run(
+            run_id, AgentRunStatus.FAILED, "AGENT_READINESS_EXECUTION_FAILED", step_count=2
+        )
+        raise
+    overview = await get_case_overview_by_id(case_id)
+    if overview is None:
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    return await _case_response(case_id, overview)
+
+
+async def _decide_overdue_follow_up_confirmation_runtime(
+    *,
+    actor: ActorContext,
+    case_id: UUID,
+    confirmation_id: UUID,
+    approve: bool,
+    reason: str | None,
+) -> AgentCaseResponse:
+    actor_id = _actor_uuid(actor)
+    decided = await decide_overdue_follow_up_confirmation(
+        case_id=case_id,
+        confirmation_id=confirmation_id,
+        actor_id=actor_id,
+        approve=approve,
+        reason=reason,
+    )
+    if not approve:
+        overview = await get_case_overview_by_id(case_id)
+        if overview is None:
+            raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+        return await _case_response(case_id, overview)
+    if decided["idempotent"] and decided["state"] == AgentCaseState.MONITORING.value:
+        overview = await get_case_overview_by_id(case_id)
+        if overview is None:
+            raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+        return await _case_response(case_id, overview)
+    try:
+        run_id = await create_run(case_id, "overdue-follow-up-execution", _run_timeout_seconds())
+    except CaseBusyError as error:
+        raise AppError(409, "AGENT_CASE_BUSY", str(error)) from error
+    snapshot = decided["action_snapshot"]
+    if not isinstance(snapshot, dict) or snapshot.get("toolName") != "record_overdue_follow_up":
+        await mark_run(run_id, AgentRunStatus.FAILED, "STALE_ACTION_SNAPSHOT", step_count=1)
+        raise AppError(409, "STALE_ACTION_SNAPSHOT", "Frozen overdue follow-up action is invalid")
+    try:
+        execution = await execute_frozen_action(
+            actor=actor,
+            case_id=case_id,
+            snapshot=snapshot,
+            stored_hash=str(decided["payload_hash"]),
+            confirmation_id=confirmation_id,
+        )
+        if execution.status is ToolExecutionStatus.OK:
+            await finalize_overdue_follow_up_execution(
+                case_id=case_id,
+                actor_id=actor_id,
+                confirmation_id=confirmation_id,
+            )
+            await _append_execution_turn(
+                case_id=case_id,
+                prompt="Overdue follow-up record confirmed",
+                execution=execution,
+                step_type="overdue_follow_up_execution",
+            )
+            await mark_run(run_id, AgentRunStatus.COMPLETED, step_count=2)
+        elif execution.status is ToolExecutionStatus.UNKNOWN_OUTCOME:
+            await transition_case(case_id, actor_id, AgentCaseState.MONITORING)
+            await _append_execution_turn(
+                case_id=case_id,
+                prompt="Overdue follow-up write outcome is unknown",
+                execution=execution,
+                step_type="overdue_follow_up_execution",
+            )
+            await mark_run(run_id, AgentRunStatus.COMPLETED, "TOOL_OUTCOME_UNKNOWN", step_count=2)
+        else:
+            await replan_readiness_execution(case_id, actor_id)
+            await _append_execution_turn(
+                case_id=case_id,
+                prompt="Overdue follow-up could not be recorded",
+                execution=execution,
+                step_type="overdue_follow_up_execution",
+            )
+            await mark_run(run_id, AgentRunStatus.COMPLETED, execution.status.value, step_count=2)
+    except AppError:
+        raise
+    except Exception:
+        await mark_run(
+            run_id, AgentRunStatus.FAILED, "AGENT_OVERDUE_FOLLOW_UP_FAILED", step_count=2
+        )
+        raise
+    overview = await get_case_overview_by_id(case_id)
+    if overview is None:
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    return await _case_response(case_id, overview)
+
+
 async def decide_case_confirmation(
     actor: ActorContext,
     case_id: UUID,
@@ -1102,15 +2117,32 @@ async def decide_case_confirmation(
     branch_id: UUID | None = None,
 ) -> AgentCaseResponse:
     """Record requester confirmation and synchronously continue the frozen action."""
-    try:
-        actor_id = UUID(actor.user_id)
-    except ValueError as error:
-        raise AppError(400, "INVALID_ACTOR_CONTEXT", "Trusted actor context is invalid") from error
-    case = await get_case(case_id, actor_id)
-    if case is None:
-        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    actor_id = _actor_uuid(actor)
+    case = await _authorized_case(actor, case_id, manage=True)
     if branch_id is not None:
         _require_case_branch(case, branch_id)
+    if case.get("case_type") == "RENTAL_RETURN":
+        try:
+            return await _decide_overdue_follow_up_confirmation_runtime(
+                actor=actor,
+                case_id=case_id,
+                confirmation_id=confirmation_id,
+                approve=approve,
+                reason=reason,
+            )
+        except ReadinessConfirmationError as error:
+            raise AppError(409, "CONFIRMATION_NOT_PENDING", str(error)) from error
+    if case.get("case_type") == "RENTAL_READINESS":
+        try:
+            return await _decide_readiness_confirmation_runtime(
+                actor=actor,
+                case_id=case_id,
+                confirmation_id=confirmation_id,
+                approve=approve,
+                reason=reason,
+            )
+        except ReadinessConfirmationError as error:
+            raise AppError(409, "CONFIRMATION_NOT_PENDING", str(error)) from error
     if case["state"] != AgentCaseState.WAITING_CONFIRMATION:
         raise AppError(409, "INVALID_CASE_TRANSITION", "Case is not waiting for confirmation")
     try:
@@ -1191,6 +2223,10 @@ async def decide_case_approval(
         _require_case_branch(case, branch_id)
     if not case.get("branch_id"):
         raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    if case.get("case_type") in OPERATIONAL_CASE_TYPES and not _case_access_allowed(
+        actor, case, manage=True
+    ):
+        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
     if case["state"] is not AgentCaseState.WAITING_APPROVAL:
         raise AppError(409, "INVALID_CASE_TRANSITION", "Case is not waiting for approval")
     try:
@@ -1270,7 +2306,10 @@ async def decide_case_approval(
             else AgentRunStatus.COMPLETED,
             step_count=2,
         )
-        return await read_agent_case(owner_actor, case_id)
+        overview = await get_case_overview_by_id(case_id)
+        if overview is None:
+            raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+        return await _case_response(case_id, overview)
     except AppError:
         await _fail_case_if_active(case_id, UUID(str(case["actor_id"])))
         await mark_run(run_id, AgentRunStatus.FAILED, error_code="AGENT_APPROVAL_FAILED")
@@ -1284,13 +2323,8 @@ async def decide_case_approval(
 async def cancel_agent_case(
     actor: ActorContext, case_id: UUID, branch_id: UUID | None = None
 ) -> AgentCaseResponse:
-    try:
-        actor_id = UUID(actor.user_id)
-    except ValueError as error:
-        raise AppError(400, "INVALID_ACTOR_CONTEXT", "Trusted actor context is invalid") from error
-    case = await get_case(case_id, actor_id)
-    if case is None:
-        raise AppError(404, "AGENT_CASE_NOT_FOUND", "Agent case not found")
+    actor_id = _actor_uuid(actor)
+    case = await _authorized_case(actor, case_id, manage=True)
     if branch_id is not None:
         _require_case_branch(case, branch_id)
     if case.get("active_run_id") is not None:

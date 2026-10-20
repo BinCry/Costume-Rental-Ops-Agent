@@ -1,5 +1,6 @@
 from secrets import compare_digest
 from typing import Annotated, cast
+from uuid import UUID
 
 from fastapi import Header, Security
 from fastapi.security import APIKeyHeader
@@ -31,6 +32,10 @@ def require_internal_service(
 def resolve_actor(
     x_actor_id: Annotated[str | None, Header()] = None,
     x_knowledge_audiences: Annotated[str | None, Header()] = None,
+    x_agent_read_branch_ids: Annotated[str | None, Header()] = None,
+    x_agent_manage_branch_ids: Annotated[str | None, Header()] = None,
+    x_agent_read_all: Annotated[str | None, Header()] = None,
+    x_agent_manage_all: Annotated[str | None, Header()] = None,
 ) -> ActorContext:
     if not x_actor_id or not x_knowledge_audiences:
         raise AppError(400, "INVALID_ACTOR_CONTEXT", "Trusted actor context is required")
@@ -52,7 +57,33 @@ def resolve_actor(
         raise AppError(400, "INVALID_ACTOR_CONTEXT", "Guest actor context is invalid")
 
     audiences = cast(tuple[RetrievalAudience, ...], raw_audiences)
-    return ActorContext(user_id=x_actor_id, audiences=audiences)
+
+    def branch_ids(value: str | None) -> tuple[UUID, ...]:
+        if not value:
+            return ()
+        try:
+            parsed = tuple(UUID(item.strip()) for item in value.split(",") if item.strip())
+        except ValueError as error:
+            raise AppError(400, "INVALID_ACTOR_CONTEXT", "Agent branch scope is invalid") from error
+        if len(parsed) != len(set(parsed)):
+            raise AppError(400, "INVALID_ACTOR_CONTEXT", "Agent branch scope is invalid")
+        return parsed
+
+    def boolean(value: str | None) -> bool:
+        if value is None:
+            return False
+        if value not in {"true", "false"}:
+            raise AppError(400, "INVALID_ACTOR_CONTEXT", "Agent global scope is invalid")
+        return value == "true"
+
+    return ActorContext(
+        user_id=x_actor_id,
+        audiences=audiences,
+        agent_read_branch_ids=branch_ids(x_agent_read_branch_ids),
+        agent_manage_branch_ids=branch_ids(x_agent_manage_branch_ids),
+        agent_read_all=boolean(x_agent_read_all),
+        agent_manage_all=boolean(x_agent_manage_all),
+    )
 
 
 def require_actor(actor: Annotated[ActorContext, Security(resolve_actor)]) -> ActorContext:

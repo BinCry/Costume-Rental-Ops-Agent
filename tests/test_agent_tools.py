@@ -104,6 +104,24 @@ def test_case_transitions_are_explicit_and_terminal_states_cannot_resume() -> No
     assert error.value.code == "INVALID_CASE_TRANSITION"
 
 
+@pytest.mark.parametrize(
+    "current",
+    [
+        AgentCaseState.MONITORING,
+        AgentCaseState.WAITING_CONFIRMATION,
+        AgentCaseState.WAITING_APPROVAL,
+    ],
+)
+def test_proactive_case_can_return_to_analysis(current: AgentCaseState) -> None:
+    assert can_transition(current, AgentCaseState.ANALYZING)
+    require_transition(current, AgentCaseState.ANALYZING)
+
+
+def test_readiness_confirmation_rejection_and_prewrite_conflict_can_replan() -> None:
+    assert can_transition(AgentCaseState.WAITING_CONFIRMATION, AgentCaseState.PLAN_READY)
+    assert can_transition(AgentCaseState.EXECUTING, AgentCaseState.ANALYZING)
+
+
 def test_execution_guard_enforces_case_step_budget() -> None:
     guard = ExecutionGuard(max_tool_calls=6, remaining_case_steps=1)
     order_id = "00000000-0000-4000-8000-000000000001"
@@ -1117,6 +1135,9 @@ async def test_runtime_treats_explicit_goal_achieved_as_success(
             "state": AgentCaseState.NEW,
             "version": 1,
             "branch_id": str(branch_id),
+            "owner_actor_id": str(actor_id),
+            "case_type": "INTERACTIVE",
+            "audiences": ("customer", "shared"),
         }
 
     async def fake_create_run(*_: object) -> object:
@@ -1128,7 +1149,9 @@ async def test_runtime_treats_explicit_goal_achieved_as_success(
     async def fake_resolve(*_: object, **__: object) -> object:
         return SimpleNamespace(goal=goal, token_usage=0)
 
-    async def fake_graph_turn(*_: object, **__: object) -> object:
+    async def fake_graph_turn(runtime_actor: object, *_: object, **__: object) -> object:
+        assert isinstance(runtime_actor, ActorContext)
+        assert runtime_actor.audiences == ("customer", "shared")
         return graph_module.GraphTurn(
             answer="Xin chÃ o!",
             termination_reason=AgentTerminationReason.GOAL_ACHIEVED,
@@ -1164,7 +1187,7 @@ async def test_runtime_treats_explicit_goal_achieved_as_success(
     monkeypatch.setattr("app.agent_tools.runtime.answer_knowledge", fail_knowledge)
 
     result = await answer_agent_message(
-        ActorContext(user_id=str(actor_id), audiences=("customer", "shared")),
+        ActorContext(user_id=str(actor_id), audiences=("staff_internal", "shared")),
         "hello",
         case_id,
         branch_id,
@@ -1191,6 +1214,8 @@ async def test_goal_resolution_failure_releases_active_run(
             "state": AgentCaseState.NEW,
             "version": 1,
             "branch_id": str(branch_id),
+            "owner_actor_id": str(actor_id),
+            "case_type": "INTERACTIVE",
         }
 
     async def fake_create_run(*_: object) -> object:

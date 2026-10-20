@@ -117,6 +117,18 @@ READ_TOOL_POLICIES: Mapping[str, ToolPolicy] = {
     "get_rental_order": ToolPolicy("get_rental_order", "read", "rentals:read", True),
     "get_payment_summary": ToolPolicy("get_payment_summary", "read", "payments:read", True),
     "check_availability": ToolPolicy("check_availability", "read", "rentals:read", True),
+    "get_rental_readiness_context": ToolPolicy(
+        "get_rental_readiness_context", "read", "rentals:read", True
+    ),
+    "get_operational_capacity_context": ToolPolicy(
+        "get_operational_capacity_context", "read", "inventory:read", True
+    ),
+    "get_overdue_rental_context": ToolPolicy(
+        "get_overdue_rental_context", "read", "rentals:read", True
+    ),
+    "get_customer_interaction_by_idempotency_key": ToolPolicy(
+        "get_customer_interaction_by_idempotency_key", "read", "crm:read", True
+    ),
     "find_rental_orders": ToolPolicy("find_rental_orders", "read", "rentals:read", True),
     "get_unit_schedule": ToolPolicy("get_unit_schedule", "read", "inventory:read", True),
     "get_stock_transfer": ToolPolicy(
@@ -231,6 +243,14 @@ WRITE_TOOL_POLICIES: Mapping[str, ToolPolicy] = {
         requires_approval=True,
         readback_tool="get_refund_by_idempotency_key",
     ),
+    "record_overdue_follow_up": ToolPolicy(
+        "record_overdue_follow_up",
+        "write",
+        "crm:manage",
+        False,
+        requires_confirmation=True,
+        readback_tool="get_customer_interaction_by_idempotency_key",
+    ),
 }
 
 WRITE_GOAL_ARGUMENTS: Mapping[str, tuple[str, ...]] = {
@@ -335,6 +355,10 @@ def validate_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> None:
         "get_unit_schedule": ("unitId",),
         "get_stock_transfer": ("transferId",),
         "check_availability": ("variantId", "pickupBranchId"),
+        "get_rental_readiness_context": ("primaryOrderId", "affectedOrderId", "unitId"),
+        "get_overdue_rental_context": ("orderId",),
+        "record_overdue_follow_up": ("orderId",),
+        "get_operational_capacity_context": ("branchId",),
         "create_unit_block": ("unitId",),
         "update_unit_block": ("blockId",),
         "cancel_unit_block": ("blockId",),
@@ -351,6 +375,60 @@ def validate_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> None:
     }
     for field_name in id_fields.get(tool_name, ()):
         _require_uuid(arguments, field_name)
+
+    if tool_name == "get_operational_capacity_context":
+        starts_at = _parse_datetime(arguments.get("startsAt"), "startsAt")
+        ends_at = _parse_datetime(arguments.get("endsAt"), "endsAt")
+        if ends_at <= starts_at:
+            raise ValueError("endsAt must be after startsAt")
+
+    if tool_name == "record_overdue_follow_up":
+        channel = arguments.get("channel")
+        if channel not in {"IN_PERSON", "PHONE", "EMAIL", "CHAT", "SOCIAL"}:
+            raise ValueError("channel is invalid")
+        outcome = arguments.get("outcome")
+        valid_outcomes = {
+            "PROMISED_RETURN",
+            "NO_ANSWER",
+            "REQUESTED_EXTENSION",
+            "REFUSED_RETURN",
+            "CONTACTED",
+            "OTHER",
+        }
+        if outcome not in valid_outcomes:
+            raise ValueError("outcome is invalid")
+        occurred_at = _parse_datetime(arguments.get("occurredAt"), "occurredAt")
+        promised_value = arguments.get("promisedReturnAt")
+        next_value = arguments.get("nextFollowUpAt")
+        if "promisedReturnAt" in arguments and promised_value is None:
+            raise ValueError("promisedReturnAt must be omitted instead of null")
+        if "nextFollowUpAt" in arguments and next_value is None:
+            raise ValueError("nextFollowUpAt must be omitted instead of null")
+        promised_at = (
+            _parse_datetime(promised_value, "promisedReturnAt")
+            if promised_value is not None
+            else None
+        )
+        next_at = _parse_datetime(next_value, "nextFollowUpAt") if next_value is not None else None
+        for field_name, value in (
+            ("occurredAt", occurred_at),
+            ("promisedReturnAt", promised_at),
+            ("nextFollowUpAt", next_at),
+        ):
+            if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+                raise ValueError(f"{field_name} must include a timezone")
+        if occurred_at > datetime.now(UTC):
+            raise ValueError("occurredAt cannot be in the future")
+        if outcome == "PROMISED_RETURN" and promised_at is None:
+            raise ValueError("promisedReturnAt is required for PROMISED_RETURN")
+        if outcome != "PROMISED_RETURN" and promised_at is not None:
+            raise ValueError("promisedReturnAt is only allowed for PROMISED_RETURN")
+        if promised_at is not None and promised_at <= occurred_at:
+            raise ValueError("promisedReturnAt must be after occurredAt")
+        if outcome in {"NO_ANSWER", "REQUESTED_EXTENSION", "REFUSED_RETURN"} and next_at is None:
+            raise ValueError(f"nextFollowUpAt is required for {outcome}")
+        if next_at is not None and next_at <= occurred_at:
+            raise ValueError("nextFollowUpAt must be after occurredAt")
 
     if tool_name == "find_rental_orders":
         search = arguments.get("search")
