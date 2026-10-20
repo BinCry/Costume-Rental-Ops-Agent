@@ -1107,6 +1107,19 @@ def _readiness_action_from_context(
     )
 
 
+def _source_observed_at_iso(analysis: dict[str, Any]) -> str:
+    value = analysis.get("source_observed_at")
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str):
+        return value
+    raise AppError(
+        409,
+        "AGENT_RECOMMENDATION_NOT_READY",
+        "Analysis source observation timestamp is missing",
+    )
+
+
 async def prepare_readiness_confirmation(
     actor: ActorContext, case_id: UUID, analysis_id: UUID, expected_version: int
 ) -> AgentCaseResponse:
@@ -1202,7 +1215,7 @@ async def prepare_readiness_confirmation(
             "analysisId": str(analysis_id),
             "optionId": option_id,
             "findingId": finding["finding_id"],
-            "findingSourceObservedAt": analysis["source_observed_at"],
+            "findingSourceObservedAt": _source_observed_at_iso(analysis),
         }
         unsigned = {key: value for key, value in frozen.items() if key != "payloadHash"}
         frozen["payloadHash"] = sha256(
@@ -1383,7 +1396,7 @@ async def prepare_overdue_follow_up_confirmation(
         frozen["recommendation"] = {
             "analysisId": str(body.analysis_id),
             "findingId": finding["finding_id"],
-            "findingSourceObservedAt": analysis["source_observed_at"],
+            "findingSourceObservedAt": _source_observed_at_iso(analysis),
         }
         unsigned = {key: value for key, value in frozen.items() if key != "payloadHash"}
         frozen["payloadHash"] = sha256(

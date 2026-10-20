@@ -1,3 +1,7 @@
+import json
+from datetime import UTC, datetime
+from hashlib import sha256
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -5,6 +9,8 @@ from uuid import uuid4
 import pytest
 
 from app.agent_tools import runtime
+from app.agent_tools.execution import validate_frozen_action
+from app.agent_tools.models import AgentCaseState, AgentToolExecutionResult, ToolExecutionStatus
 from app.agent_tools.runtime import _readiness_action_from_context
 from app.config import get_settings
 from app.errors import AppError
@@ -86,6 +92,92 @@ def test_allocated_unit_not_ready_can_prepare_reallocation_without_affected_orde
         "reason": "Rental readiness recommendation",
     }
     assert version == 7
+
+
+@pytest.mark.asyncio
+async def test_prepare_readiness_confirmation_serializes_database_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_READINESS_EXECUTION_ENABLED", "true")
+    get_settings.cache_clear()
+    case_id = uuid4()
+    actor_id = uuid4()
+    analysis_id = uuid4()
+    finding_id = uuid4()
+    case, analysis, context, option_id = _inputs()
+    case.update(
+        {
+            "case_type": "RENTAL_READINESS",
+            "state": AgentCaseState.PLAN_READY,
+            "version": 4,
+        }
+    )
+    analysis.update(
+        {
+            "analysis_id": str(analysis_id),
+            "source_observed_at": datetime(2026, 10, 19, 9, tzinfo=UTC),
+        }
+    )
+    overview = {
+        **case,
+        "analysis": analysis,
+        "finding": {
+            **case["finding"],
+            "finding_id": str(finding_id),
+            "status": "OPEN",
+            "dedupe_key": "readiness:one",
+            "primary_entity_id": ORDER_ID,
+        },
+    }
+    captured: dict[str, object] = {}
+
+    async def fake_create_confirmation(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"summary": kwargs["summary"]}
+
+    monkeypatch.setattr(runtime, "_authorized_case", AsyncMock(return_value=case))
+    monkeypatch.setattr(runtime, "get_case_overview_by_id", AsyncMock(return_value=overview))
+    monkeypatch.setattr(runtime, "create_run", AsyncMock(return_value=uuid4()))
+    monkeypatch.setattr(
+        runtime,
+        "observe_live_tool",
+        AsyncMock(
+            return_value=AgentToolExecutionResult(
+                status=ToolExecutionStatus.OK,
+                data={**context, "riskStillPresent": True, "observedAt": "2026-10-19T10:00:00Z"},
+            )
+        ),
+    )
+    monkeypatch.setattr(runtime, "create_readiness_confirmation", fake_create_confirmation)
+    monkeypatch.setattr(runtime, "append_turn", AsyncMock())
+    monkeypatch.setattr(runtime, "mark_run", AsyncMock())
+    monkeypatch.setattr(runtime, "_case_response", AsyncMock(return_value=SimpleNamespace()))
+
+    await runtime.prepare_readiness_confirmation(
+        ActorContext(
+            user_id=str(actor_id),
+            audiences=("staff_internal", "shared"),
+            agent_manage_branch_ids=(uuid4(),),
+        ),
+        case_id,
+        analysis_id,
+        4,
+    )
+
+    snapshot = captured["action_snapshot"]
+    assert isinstance(snapshot, dict)
+    assert snapshot["recommendation"]["optionId"] == option_id
+    assert snapshot["recommendation"]["findingSourceObservedAt"] == (
+        "2026-10-19T09:00:00+00:00"
+    )
+    stored_snapshot = json.loads(json.dumps(snapshot))
+    stored_hash = sha256(
+        json.dumps(
+            stored_snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    validate_frozen_action(stored_snapshot, stored_hash)
+    get_settings.cache_clear()
 
 
 def test_previous_rental_rule_still_requires_matching_affected_order() -> None:

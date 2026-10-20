@@ -1,4 +1,6 @@
+import json
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -8,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent_tools import routes, runtime
-from app.agent_tools.execution import _postcondition, _readback_arguments
+from app.agent_tools.execution import _postcondition, _readback_arguments, validate_frozen_action
 from app.agent_tools.guard import validate_tool_arguments
 from app.agent_tools.models import AgentCaseState, AgentToolExecutionResult, ToolExecutionStatus
 from app.config import get_settings
@@ -134,7 +136,7 @@ async def test_prepare_overdue_follow_up_freezes_only_structured_fields(
         **case,
         "analysis": {
             "analysis_id": str(analysis_id),
-            "source_observed_at": "2026-10-19T09:00:00+00:00",
+            "source_observed_at": datetime(2026, 10, 19, 9, tzinfo=UTC),
         },
         "finding": {
             "finding_id": str(finding_id),
@@ -198,6 +200,16 @@ async def test_prepare_overdue_follow_up_freezes_only_structured_fields(
     }
     assert "customerUserId" not in snapshot["arguments"]
     assert "summary" not in snapshot["arguments"]
+    assert snapshot["recommendation"]["findingSourceObservedAt"] == (
+        "2026-10-19T09:00:00+00:00"
+    )
+    stored_snapshot = json.loads(json.dumps(snapshot))
+    stored_hash = sha256(
+        json.dumps(
+            stored_snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    validate_frozen_action(stored_snapshot, stored_hash)
     get_settings.cache_clear()
 
 
