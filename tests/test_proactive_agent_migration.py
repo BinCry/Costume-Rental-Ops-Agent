@@ -379,3 +379,65 @@ def test_capacity_migration_is_rerunnable_and_adds_branch_level_case_type() -> N
         ).fetchone()
         assert row == {"case_type": "OPERATIONAL_CAPACITY"}
         connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema_name)))
+
+
+def test_schedule_conflict_migration_is_rerunnable_and_accepts_unit_level_finding() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migrations = [
+        root / "sql" / f"{number:03d}_{name}.sql"
+        for number, name in [
+            (2, "agent_cases"),
+            (3, "agent_runtime"),
+            (4, "agent_run_budgets"),
+            (5, "agent_sync_runtime"),
+            (6, "proactive_agent_cases"),
+            (7, "finding_observation_ordering"),
+            (8, "rental_readiness_analysis"),
+            (9, "rental_readiness_execution"),
+            (10, "order_preparation_delay"),
+            (11, "rental_return_overdue"),
+            (12, "operational_capacity_shortfall"),
+        ]
+    ]
+    migration = root / "sql" / "013_unit_schedule_conflict.sql"
+    schema_name = f"test_agent_case6_{uuid4().hex}"
+    with (
+        psycopg.connect(get_settings().AI_DATABASE_URL, row_factory=dict_row) as connection,
+        connection.transaction(),
+    ):
+        connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema_name)))
+        connection.execute(
+            sql.SQL("SET LOCAL search_path TO {}, public").format(sql.Identifier(schema_name))
+        )
+        for item in migrations:
+            connection.execute(item.read_text(encoding="utf-8"), prepare=False)
+        migration_sql = migration.read_text(encoding="utf-8")
+        connection.execute(migration_sql, prepare=False)
+        connection.execute(migration_sql, prepare=False)
+        branch_id, case_id, primary_id, affected_id, unit_id = (
+            uuid4(),
+            uuid4(),
+            uuid4(),
+            uuid4(),
+            uuid4(),
+        )
+        connection.execute(
+            "INSERT INTO agent_cases "
+            "(id, audiences, state, origin, case_type, branch_id) "
+            "VALUES (%s, %s, 'NEW', 'SYSTEM', 'RENTAL_READINESS', %s)",
+            (case_id, ["staff_internal"], branch_id),
+        )
+        connection.execute(
+            "INSERT INTO agent_findings "
+            "(case_id, rule_code, rule_version, dedupe_key, branch_id, primary_entity_id, "
+            " affected_entity_id, unit_id, window_start, window_end, severity, evidence, "
+            " source_observed_at) "
+            "VALUES (%s, 'UNIT_SCHEDULE_CONFLICT', 'v1', %s, %s, %s, %s, %s, "
+            " now(), now() + interval '1 hour', 'HIGH', '{}'::jsonb, now())",
+            (case_id, f"schedule:{case_id}", branch_id, primary_id, affected_id, unit_id),
+        )
+        row = connection.execute(
+            "SELECT rule_code FROM agent_findings WHERE case_id = %s", (case_id,)
+        ).fetchone()
+        assert row == {"rule_code": "UNIT_SCHEDULE_CONFLICT"}
+        connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema_name)))

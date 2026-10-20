@@ -192,6 +192,21 @@ def test_previous_rental_rule_still_requires_matching_affected_order() -> None:
     assert selected_option_id == option_id
 
 
+def test_schedule_conflict_can_prepare_reallocation_for_the_later_order() -> None:
+    case, analysis, context, option_id = _inputs("UNIT_SCHEDULE_CONFLICT")
+
+    selected_option_id, arguments, version = _readiness_action_from_context(
+        case=case,
+        analysis=analysis,
+        context=context,
+    )
+
+    assert selected_option_id == option_id
+    assert arguments["orderId"] == ORDER_ID
+    assert arguments["unitId"] == REPLACEMENT_UNIT_ID
+    assert version == 7
+
+
 @pytest.mark.parametrize("changed_field", ["rule", "affected_unit"])
 def test_allocated_unit_not_ready_rejects_stale_identity(changed_field: str) -> None:
     case, analysis, context, _ = _inputs()

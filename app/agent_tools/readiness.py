@@ -28,6 +28,33 @@ class _NarrativeDraft(ApiModel):
 def _fallback(
     *, before: dict[str, Any], options: list[dict[str, Any]], recommended_option_id: str | None
 ) -> AgentReadinessAnalysisNarrative:
+    rule_code = str(before.get("ruleCode") or "")
+    if rule_code == "UNIT_SCHEDULE_CONFLICT":
+        if recommended_option_id is None:
+            return AgentReadinessAnalysisNarrative(
+                summary="Hai đơn đang giữ cùng một trang phục trong khoảng thời gian giao nhau.",
+                rationale=[
+                    "Xung đột được xác định từ khoảng thời gian giữ trang phục đã lưu.",
+                    "Không có unit cùng variant sẵn sàng để đổi cho đơn đến sau.",
+                ],
+                risks=["Không được tự đổi giờ thuê, hủy đơn hoặc thay trang phục khác variant."],
+                next_step="Chuyển nhân viên phụ trách xử lý thủ công với khách hàng và vận hành.",
+                fallback=True,
+            )
+        selected = next(item for item in options if item["optionId"] == recommended_option_id)
+        return AgentReadinessAnalysisNarrative(
+            summary=(
+                "Phát hiện hai đơn trùng lịch; đề xuất đổi đơn đến sau sang unit "
+                f"{selected['targetUnit']['unitCode']}."
+            ),
+            rationale=[
+                "Unit hiện tại bị hai khoảng giữ trang phục chồng lấp.",
+                "Unit thay thế cùng variant đã qua kiểm tra availability trong đúng khoảng thuê.",
+            ],
+            risks=["Cần confirmation và đọc lại dữ liệu trước khi thực thi đổi unit."],
+            next_step="Xác nhận phương án đổi unit cho đơn đến sau.",
+            fallback=True,
+        )
     if before.get("optionType") == "KEEP_ORDER_STATUS":
         status = str(before.get("status") or "")
         action = "bắt đầu chuẩn bị đơn" if status == "CONFIRMED" else "hoàn tất chuẩn bị đơn"
@@ -119,10 +146,12 @@ def simulate(
         "earliestReadyAt": earliest_ready_at,
         "feasible": False,
         "reasonCodes": reason_codes,
+        "ruleCode": rule_code,
     }
     options: list[dict[str, Any]] = []
     units = context.get("replacementUnits")
-    if isinstance(units, list):
+    can_reallocate = primary.get("item", {}).get("allocationStatus") != "ACTIVE"
+    if isinstance(units, list) and can_reallocate:
         for unit in sorted(
             (item for item in units if isinstance(item, dict)),
             key=lambda item: (str(item.get("unitCode", "")), str(item.get("id", ""))),

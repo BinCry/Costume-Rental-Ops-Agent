@@ -170,6 +170,7 @@ class AgentFindingUpsertInput(RequestModel):
         "ORDER_PREPARATION_DELAYED",
         "RENTAL_RETURN_OVERDUE",
         "OPERATIONAL_CAPACITY_SHORTFALL",
+        "UNIT_SCHEDULE_CONFLICT",
     ]
     rule_version: str = Field(min_length=1, max_length=50)
     dedupe_key: str = Field(min_length=1, max_length=255)
@@ -215,6 +216,7 @@ class AgentFindingResolveInput(RequestModel):
         "ORDER_PREPARATION_DELAYED",
         "RENTAL_RETURN_OVERDUE",
         "OPERATIONAL_CAPACITY_SHORTFALL",
+        "UNIT_SCHEDULE_CONFLICT",
     ]
     observed_at: datetime
     resolution_code: Literal["RISK_NO_LONGER_PRESENT"]

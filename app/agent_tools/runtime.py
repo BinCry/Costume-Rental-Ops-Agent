@@ -845,7 +845,7 @@ def _readiness_context_arguments(finding: dict[str, Any]) -> dict[str, object]:
     }
     if finding.get("unit_id") is not None:
         arguments["unitId"] = str(finding["unit_id"])
-    if rule_code == "PREVIOUS_RENTAL_NOT_RETURNED":
+    if rule_code in {"PREVIOUS_RENTAL_NOT_RETURNED", "UNIT_SCHEDULE_CONFLICT"}:
         arguments["affectedOrderId"] = str(finding["affected_entity_id"])
     return arguments
 
@@ -1060,7 +1060,7 @@ def _readiness_action_from_context(
     rule_code = finding.get("rule_code")
     if context.get("ruleCode") != rule_code:
         raise AppError(409, "AGENT_RECOMMENDATION_STALE", "Readiness rule changed")
-    if rule_code == "PREVIOUS_RENTAL_NOT_RETURNED":
+    if rule_code in {"PREVIOUS_RENTAL_NOT_RETURNED", "UNIT_SCHEDULE_CONFLICT"}:
         if not isinstance(affected, dict) or affected.get("id") != finding.get(
             "affected_entity_id"
         ):

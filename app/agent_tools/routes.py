@@ -215,7 +215,7 @@ async def list_findings_action(
             pattern=(
                 "^(PREVIOUS_RENTAL_NOT_RETURNED|ALLOCATED_UNIT_NOT_READY|"
                 "ORDER_PREPARATION_DELAYED|RENTAL_RETURN_OVERDUE|"
-                "OPERATIONAL_CAPACITY_SHORTFALL)$"
+                "OPERATIONAL_CAPACITY_SHORTFALL|UNIT_SCHEDULE_CONFLICT)$"
             ),
         ),
     ],

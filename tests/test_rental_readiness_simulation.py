@@ -67,6 +67,52 @@ def test_simulation_supports_allocated_unit_not_ready_without_an_affected_order(
     assert snapshot["before"]["reasonCodes"] == ["STATUS_NOT_READY"]
 
 
+def test_schedule_conflict_proposes_reallocation_only_for_a_confirmed_later_order() -> None:
+    context = _context([{"id": "00000000-0000-0000-0000-000000000021", "unitCode": "A-01"}])
+    context.update(
+        {
+            "ruleCode": "UNIT_SCHEDULE_CONFLICT",
+            "primaryOrder": {
+                **context["primaryOrder"],
+                "item": {
+                    "id": "00000000-0000-0000-0000-000000000011",
+                    "allocationStatus": "CONFIRMED",
+                },
+            },
+            "reasonCodes": ["UNIT_SCHEDULE_OVERLAP"],
+        }
+    )
+
+    snapshot, options, recommended, outcome = simulate(context)
+
+    assert outcome == "READY"
+    assert recommended == "reallocate:00000000-0000-0000-0000-000000000021"
+    assert options[0]["optionType"] == "REALLOCATE_SAME_BRANCH"
+    assert snapshot["before"]["ruleCode"] == "UNIT_SCHEDULE_CONFLICT"
+
+
+def test_schedule_conflict_hands_off_when_later_order_is_already_active() -> None:
+    context = _context([{"id": "00000000-0000-0000-0000-000000000021", "unitCode": "A-01"}])
+    context.update(
+        {
+            "ruleCode": "UNIT_SCHEDULE_CONFLICT",
+            "primaryOrder": {
+                **context["primaryOrder"],
+                "item": {
+                    "id": "00000000-0000-0000-0000-000000000011",
+                    "allocationStatus": "ACTIVE",
+                },
+            },
+        }
+    )
+
+    _, options, recommended, outcome = simulate(context)
+
+    assert outcome == "NO_FEASIBLE_OPTION"
+    assert options == []
+    assert recommended is None
+
+
 def test_preparation_delay_recommends_manual_non_executable_work() -> None:
     context = {
         "ruleCode": "ORDER_PREPARATION_DELAYED",

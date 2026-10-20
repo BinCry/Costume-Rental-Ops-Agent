@@ -19,6 +19,7 @@ MIGRATIONS = (
     ("011_order_preparation_delay_python", "010_order_preparation_delay.sql"),
     ("012_rental_return_overdue_python", "011_rental_return_overdue.sql"),
     ("013_operational_capacity_shortfall_python", "012_operational_capacity_shortfall.sql"),
+    ("014_unit_schedule_conflict_python", "013_unit_schedule_conflict.sql"),
 )
 
 
