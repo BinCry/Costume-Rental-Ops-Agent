@@ -870,10 +870,11 @@ def render_grounded_answer(
         return f"Khoảng thời gian yêu cầu {availability} bộ phù hợp; số bộ khả dụng: {len(units)}."
     if goal.goal_type is AgentGoalType.STOCK_TRANSFER_LOOKUP:
         transfer_label = data.get("transferCode") or data.get("id")
+        branch_role_value = data.get("caseBranchRole")
         branch_role = {
             "FROM": "chi nhánh gửi",
             "TO": "chi nhánh nhận",
-        }.get(data.get("caseBranchRole"))
+        }.get(branch_role_value) if isinstance(branch_role_value, str) else None
         if branch_role:
             return (
                 f"Phiếu điều chuyển {transfer_label} đang ở trạng thái {data.get('status')}. "
