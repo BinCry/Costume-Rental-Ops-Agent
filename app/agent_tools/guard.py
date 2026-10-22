@@ -858,13 +858,35 @@ def render_grounded_answer(
             f"Phiếu điều chuyển {data.get('id')} đang ở trạng thái {data.get('status')}, "
             f"từ chi nhánh {data.get('fromBranchId')} đến {data.get('toBranchId')}."
         )
-    if goal.goal_type in {
-        AgentGoalType.RENTAL_ORDER_SEARCH,
-        AgentGoalType.UNIT_SCHEDULE,
-    }:
+    if goal.goal_type is AgentGoalType.RENTAL_ORDER_SEARCH:
         items_value = data.get("items")
         items = items_value if isinstance(items_value, list) else []
-        return f"Đã tìm thấy {len(items)} bản ghi phù hợp trong phạm vi được phép."
+        if not items:
+            return "Không tìm thấy đơn thuê phù hợp tại chi nhánh đang làm việc."
+        lines = []
+        for item in items[:10]:
+            if not isinstance(item, dict):
+                continue
+            label = item.get("orderCode") or item.get("id")
+            lines.append(
+                f"- {label}: {item.get('status')}; nhận {item.get('plannedStartAt')}; "
+                f"trả {item.get('plannedDueAt')}."
+            )
+        return f"Tìm thấy {len(items)} đơn thuê trong kết quả hiện tại:\n" + "\n".join(lines)
+    if goal.goal_type is AgentGoalType.UNIT_SCHEDULE:
+        items_value = data.get("items")
+        items = items_value if isinstance(items_value, list) else []
+        if not items:
+            return "Không có khoảng tạm ngưng cho thuê nào trong lịch đã tra cứu."
+        lines = []
+        for item in items[:20]:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- {item.get('blockType')} ({item.get('status')}): "
+                f"{item.get('blockedFrom')} đến {item.get('blockedUntil')}."
+            )
+        return "Các khoảng tạm ngưng cho thuê trong lịch:\n" + "\n".join(lines)
     return fallback
 
 

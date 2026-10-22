@@ -37,6 +37,7 @@ from app.agent_tools.guard import (
 )
 from app.agent_tools.models import (
     AgentGoalSpec,
+    AgentGoalType,
     AgentTerminationReason,
     AgentToolExecutionRequest,
     ToolExecutionStatus,
@@ -60,6 +61,53 @@ _READ_TOOL_ALLOWLIST = frozenset(
         "get_stock_transfer",
     }
 )
+
+
+def _direct_read_request(goal: AgentGoalSpec) -> tuple[str, dict[str, Any]] | None:
+    """Use validated goal inputs for a single authoritative read, without a model loop."""
+    values = goal.extracted_inputs
+    if goal.missing_inputs or len(goal.required_tools) != 1:
+        return None
+    tool_name = goal.required_tools[0]
+    if tool_name not in goal.constraints.allowed_tools:
+        return None
+    fields_by_goal = {
+        AgentGoalType.RENTAL_ORDER_LOOKUP: ("get_rental_order", {"orderId": "orderId"}),
+        AgentGoalType.RENTAL_ORDER_SEARCH: (
+            "find_rental_orders",
+            {"search": "search"},
+        ),
+        AgentGoalType.PAYMENT_SUMMARY: ("get_payment_summary", {"orderId": "orderId"}),
+        AgentGoalType.AVAILABILITY_CHECK: (
+            "check_availability",
+            {
+                "variantId": "variantId",
+                "pickupBranchId": "pickupBranchId",
+                "plannedStartAt": "plannedStartAt",
+                "plannedDueAt": "plannedDueAt",
+            },
+        ),
+        AgentGoalType.UNIT_SCHEDULE: ("get_unit_schedule", {"unitId": "unitId"}),
+        AgentGoalType.STOCK_TRANSFER_LOOKUP: (
+            "get_stock_transfer",
+            {"transferId": "transferId"},
+        ),
+    }
+    contract = fields_by_goal.get(goal.goal_type)
+    if contract is None or contract[0] != tool_name:
+        return None
+    arguments = {
+        target: values[source] for target, source in contract[1].items() if source in values
+    }
+    if len(arguments) != len(contract[1]):
+        return None
+    if goal.goal_type is AgentGoalType.RENTAL_ORDER_SEARCH:
+        arguments["pageSize"] = 10
+    if goal.goal_type is AgentGoalType.UNIT_SCHEDULE:
+        for field_name in ("from", "to"):
+            if field_name in values:
+                arguments[field_name] = values[field_name]
+    return tool_name, arguments
 
 
 def _turn_step_limit(goal: AgentGoalSpec, configured_limit: int) -> int:
@@ -155,8 +203,6 @@ async def run_graph_turn(
     """
     model, fallback_model = _models()
     settings = get_settings()
-    if model is None:
-        return None
     goal = goal or infer_goal(message)
     turn_tool_allowlist = frozenset(goal.constraints.allowed_tools) & _READ_TOOL_ALLOWLIST
     turn_step_limit = _turn_step_limit(goal, settings.AGENT_MAX_STEPS_PER_TURN)
@@ -396,6 +442,51 @@ async def run_graph_turn(
     async def get_stock_transfer(transfer_id: str) -> str:
         """Read one stock transfer by UUID."""
         return await studio_read("get_stock_transfer", {"transferId": transfer_id})
+
+    direct_request = _direct_read_request(goal)
+    if direct_request is not None:
+        tool_name, arguments = direct_request
+        await studio_read(tool_name, arguments)
+        answer = render_grounded_answer(
+            goal,
+            guard.observations,
+            "Chưa thể xác minh dữ liệu trực tiếp từ Studio cho yêu cầu này.",
+        )
+        verification = verify_completion(
+            user_message=message,
+            answer=answer,
+            evidence_count=len(evidence),
+            tool_calls=guard.tool_calls,
+            goal=goal,
+            observations=guard.observations,
+        )
+        reason = (
+            AgentTerminationReason.GOAL_ACHIEVED
+            if verification.achieved
+            else verification.reason or AgentTerminationReason.VERIFICATION_FAILED
+        )
+        if not verification.achieved and verification.message:
+            answer = verification.message
+        return GraphTurn(
+            answer=answer,
+            evidence=evidence,
+            tool_calls=guard.tool_calls,
+            termination_reason=reason,
+            goal_verified=verification.achieved,
+            goal=goal,
+            handoff=(
+                build_handoff_context(
+                    goal=goal,
+                    reason=reason,
+                    observations=guard.observations,
+                    evidence_count=len(evidence),
+                ).as_dict()
+                if not verification.achieved
+                else None
+            ),
+        )
+    if model is None:
+        return None
 
     async with AsyncPostgresSaver.from_conn_string(settings.AI_DATABASE_URL) as checkpointer:
         await _ensure_checkpoint_tables(checkpointer)

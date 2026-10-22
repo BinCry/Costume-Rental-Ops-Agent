@@ -12,7 +12,7 @@ from app.agent_tools import goal as goal_module
 from app.agent_tools import graph as graph_module
 from app.agent_tools.client import AgentToolClient, ToolInvocationError
 from app.agent_tools.goal import infer_goal, missing_input_question, resolve_goal
-from app.agent_tools.graph import _turn_step_limit
+from app.agent_tools.graph import _direct_read_request, _turn_step_limit
 from app.agent_tools.guard import (
     ALL_TOOL_POLICIES,
     AgentRuleViolation,
@@ -787,6 +787,62 @@ def test_goal_distinguishes_transfer_read_from_create_workflow() -> None:
     assert skill_allows_tool(create, "create_stock_transfer")
 
 
+def test_production_read_prompts_resolve_to_one_validated_tool_call() -> None:
+    order_id = str(uuid4())
+    unit_id = str(uuid4())
+    transfer_id = str(uuid4())
+    variant_id = str(uuid4())
+    branch_id = str(uuid4())
+    prompts = (
+        (
+            "Tìm đơn thuê có mã RT-1024. Hãy kiểm tra trực tiếp trên Studio.",
+            "find_rental_orders",
+            {"search": "RT-1024", "pageSize": 10},
+        ),
+        (
+            f"Tìm và đọc chi tiết đơn {order_id}, cho biết trạng thái và thời gian nhận/trả.",
+            "get_rental_order",
+            {"orderId": order_id},
+        ),
+        (
+            f"Kiểm tra tình trạng thanh toán của đơn {order_id}. Không thay đổi dữ liệu.",
+            "get_payment_summary",
+            {"orderId": order_id},
+        ),
+        (
+            f"Kiểm tra variant {variant_id} tại chi nhánh {branch_id} từ "
+            "2026-10-22T08:00:00+07:00 đến 2026-10-24T08:00:00+07:00.",
+            "check_availability",
+            {
+                "variantId": variant_id,
+                "pickupBranchId": branch_id,
+                "plannedStartAt": "2026-10-22T08:00:00+07:00",
+                "plannedDueAt": "2026-10-24T08:00:00+07:00",
+            },
+        ),
+        (
+            f"Kiểm tra lịch sử dụng của unit {unit_id} từ 2026-10-22T08:00:00+07:00 "
+            "đến 2026-10-24T08:00:00+07:00.",
+            "get_unit_schedule",
+            {
+                "unitId": unit_id,
+                "from": "2026-10-22T08:00:00+07:00",
+                "to": "2026-10-24T08:00:00+07:00",
+            },
+        ),
+        (
+            f"Kiểm tra trạng thái phiếu điều chuyển {transfer_id} "
+            "bằng dữ liệu trực tiếp từ Studio.",
+            "get_stock_transfer",
+            {"transferId": transfer_id},
+        ),
+    )
+    for prompt, tool_name, arguments in prompts:
+        goal = infer_goal(prompt)
+        assert goal.missing_inputs == (), prompt
+        assert _direct_read_request(goal) == (tool_name, arguments), prompt
+
+
 def test_read_only_availability_skill_cannot_select_reallocation_write() -> None:
     goal = infer_goal("Kiểm tra mẫu này còn trống trong lịch không")
 
@@ -969,6 +1025,34 @@ def test_live_answer_is_rendered_from_authoritative_observation() -> None:
     assert "READY_FOR_PICKUP" in answer
     assert "RENT-001" in answer
     assert "Sai trạng thái" not in answer
+
+
+def test_order_search_answer_shows_order_facts_instead_of_only_count() -> None:
+    goal = infer_goal("Tìm đơn thuê có mã RT-1024")
+    guard = ExecutionGuard(max_tool_calls=1, remaining_case_steps=1)
+    guard.before_tool("find_rental_orders", {"search": "RT-1024", "pageSize": 10})
+    guard.after_tool(
+        observation={"status": "ok"},
+        data={
+            "items": [
+                {
+                    "orderCode": "RT-1024",
+                    "status": "CONFIRMED",
+                    "plannedStartAt": "2026-10-22T08:00:00Z",
+                    "plannedDueAt": "2026-10-24T08:00:00Z",
+                }
+            ]
+        },
+        observed_at=datetime.now(UTC),
+        permission_decision="allowed",
+    )
+
+    answer = render_grounded_answer(goal, guard.observations, "fallback")
+
+    assert "RT-1024" in answer
+    assert "CONFIRMED" in answer
+    assert "2026-10-24" in answer
+    assert "fallback" not in answer
 
 
 def test_knowledge_answer_is_rendered_with_retrieved_citation() -> None:

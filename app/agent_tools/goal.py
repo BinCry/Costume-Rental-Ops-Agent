@@ -117,6 +117,7 @@ _REQUIRED_INPUTS: dict[AgentGoalType, tuple[str, ...]] = {
     AgentGoalType.STOCK_TRANSFER_LOOKUP: ("transferId",),
     AgentGoalType.UNIT_SCHEDULE: ("unitId",),
     AgentGoalType.RENTAL_ORDER_LOOKUP: ("orderId",),
+    AgentGoalType.RENTAL_ORDER_SEARCH: ("search",),
 }
 
 _UNIT_BLOCK_CREATE_INPUTS = ("unitId", "blockType", "blockedFrom", "blockedUntil", "reason")
@@ -200,13 +201,30 @@ def _match_rule(message: str) -> AgentGoalType | None:
         return AgentGoalType.STOCK_TRANSFER_CREATE
     if _contains(text, "thanh toan", "tien coc", "quyet toan", "hoan tien", "payment", "refund"):
         return AgentGoalType.PAYMENT_SUMMARY
-    if _contains(text, "kha dung", "con trong", "availability", "co san", "trong lich"):
+    if _contains(
+        text,
+        "kha dung",
+        "con trong",
+        "availability",
+        "co san",
+        "trong lich",
+        "kiem tra variant",
+    ):
         return AgentGoalType.AVAILABILITY_CHECK
     if _contains(text, "dieu chuyen", "chuyen kho", "transfer"):
         return AgentGoalType.STOCK_TRANSFER_LOOKUP
-    if _contains(text, "lich cua bo", "lich unit", "unit schedule", "lich trang phuc"):
+    if _contains(
+        text,
+        "lich cua bo",
+        "lich unit",
+        "lich su dung cua unit",
+        "unit schedule",
+        "lich trang phuc",
+    ):
         return AgentGoalType.UNIT_SCHEDULE
-    if _contains(text, "don thue", "don hang", "rental order", "order"):
+    if _contains(text, "don thue", "don hang", "rental order", "order") or (
+        re.search(r"\bdon\b", text) and _contains(text, "tim", "doc chi tiet", "tra cuu")
+    ):
         return (
             AgentGoalType.RENTAL_ORDER_LOOKUP if identifiers else AgentGoalType.RENTAL_ORDER_SEARCH
         )
@@ -267,6 +285,11 @@ def _rule_inputs(
             values["toBranchId"] = identifiers[1]
         if len(identifiers) >= 3:
             values["unitIds"] = list(identifiers[2:])
+    elif goal_type is AgentGoalType.UNIT_SCHEDULE:
+        if timestamps:
+            values["from"] = timestamps[0]
+        if len(timestamps) >= 2:
+            values["to"] = timestamps[1]
     return values
 
 
@@ -417,6 +440,14 @@ def _build_goal(
     identifiers = tuple(dict.fromkeys(match.lower() for match in _UUID_PATTERN.findall(message)))
     timestamps = tuple(_ISO_TIMESTAMP_PATTERN.findall(message))
     values = _rule_inputs(goal_type, identifiers, timestamps)
+    if goal_type is AgentGoalType.RENTAL_ORDER_SEARCH:
+        code_match = re.search(
+            r"(?:mã(?:\s+đơn)?|ma(?:\s+don)?|code)\s*[:#]?\s*[`'\"]?([A-Za-z0-9][A-Za-z0-9_-]{1,63})",
+            message,
+            flags=re.IGNORECASE,
+        )
+        if code_match:
+            values["search"] = code_match.group(1)
     if goal_type is AgentGoalType.UNIT_BLOCK_CHANGE:
         values.update(_unit_block_rule_inputs(message, identifiers, timestamps))
     values.update(extracted_inputs or {})
