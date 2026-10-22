@@ -226,7 +226,9 @@ def _match_rule(message: str) -> AgentGoalType | None:
         re.search(r"\bdon\b", text) and _contains(text, "tim", "doc chi tiet", "tra cuu")
     ):
         return (
-            AgentGoalType.RENTAL_ORDER_LOOKUP if identifiers else AgentGoalType.RENTAL_ORDER_SEARCH
+            AgentGoalType.RENTAL_ORDER_LOOKUP
+            if identifiers or _contains(text, "doc chi tiet", "xem chi tiet")
+            else AgentGoalType.RENTAL_ORDER_SEARCH
         )
     if _contains(
         text,
@@ -406,6 +408,12 @@ def _identifiers_from_inputs(values: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _missing_inputs(goal_type: AgentGoalType, values: dict[str, Any]) -> tuple[str, ...]:
+    if (
+        goal_type in {AgentGoalType.RENTAL_ORDER_LOOKUP, AgentGoalType.PAYMENT_SUMMARY}
+        and values.get("search")
+        and not values.get("orderId")
+    ):
+        return ()
     if goal_type is AgentGoalType.STOCK_TRANSFER_DECISION:
         return ("approvalEndpoint",)
     if goal_type is AgentGoalType.UNIT_BLOCK_CHANGE:
@@ -440,7 +448,15 @@ def _build_goal(
     identifiers = tuple(dict.fromkeys(match.lower() for match in _UUID_PATTERN.findall(message)))
     timestamps = tuple(_ISO_TIMESTAMP_PATTERN.findall(message))
     values = _rule_inputs(goal_type, identifiers, timestamps)
-    if goal_type is AgentGoalType.RENTAL_ORDER_SEARCH:
+    if (
+        goal_type
+        in {
+            AgentGoalType.RENTAL_ORDER_SEARCH,
+            AgentGoalType.RENTAL_ORDER_LOOKUP,
+            AgentGoalType.PAYMENT_SUMMARY,
+        }
+        and not identifiers
+    ):
         code_match = re.search(
             r"(?:mã(?:\s+đơn)?|ma(?:\s+don)?|code)\s*[:#]?\s*[`'\"]?([A-Za-z0-9][A-Za-z0-9_-]{1,63})",
             message,
@@ -452,6 +468,12 @@ def _build_goal(
         values.update(_unit_block_rule_inputs(message, identifiers, timestamps))
     values.update(extracted_inputs or {})
     required_tools, success_criteria = _GOAL_CONTRACTS[goal_type]
+    if (
+        goal_type in {AgentGoalType.RENTAL_ORDER_LOOKUP, AgentGoalType.PAYMENT_SUMMARY}
+        and values.get("search")
+        and not values.get("orderId")
+    ):
+        required_tools = ("find_rental_orders", *required_tools)
     if goal_type is AgentGoalType.UNIT_BLOCK_CHANGE:
         action_tool = {
             "create": "create_unit_block",

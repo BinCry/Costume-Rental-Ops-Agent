@@ -843,6 +843,24 @@ def test_production_read_prompts_resolve_to_one_validated_tool_call() -> None:
         assert _direct_read_request(goal) == (tool_name, arguments), prompt
 
 
+def test_order_code_resolves_through_search_before_detail_or_payment_read() -> None:
+    detail = infer_goal(
+        "Tìm và đọc chi tiết đơn mã ORD-DEMO-001, cho biết trạng thái và thời gian nhận/trả."
+    )
+    payment = infer_goal("Kiểm tra tình trạng thanh toán của đơn mã ORD-DEMO-001.")
+
+    assert detail.goal_type is AgentGoalType.RENTAL_ORDER_LOOKUP
+    assert detail.required_tools == ("find_rental_orders", "get_rental_order")
+    assert payment.goal_type is AgentGoalType.PAYMENT_SUMMARY
+    assert payment.required_tools == ("find_rental_orders", "get_payment_summary")
+    for goal in (detail, payment):
+        assert goal.missing_inputs == ()
+        assert _direct_read_request(goal) == (
+            "find_rental_orders",
+            {"search": "ORD-DEMO-001", "pageSize": 10},
+        )
+
+
 def test_read_only_availability_skill_cannot_select_reallocation_write() -> None:
     goal = infer_goal("Kiểm tra mẫu này còn trống trong lịch không")
 
@@ -1052,6 +1070,42 @@ def test_order_search_answer_shows_order_facts_instead_of_only_count() -> None:
     assert "RT-1024" in answer
     assert "CONFIRMED" in answer
     assert "2026-10-24" in answer
+    assert "fallback" not in answer
+
+
+def test_unit_schedule_answer_includes_rentals_and_maintenance_blocks() -> None:
+    unit_id = str(uuid4())
+    goal = infer_goal(f"Kiểm tra lịch sử dụng của unit {unit_id}")
+    guard = ExecutionGuard(max_tool_calls=1, remaining_case_steps=1)
+    guard.before_tool("get_unit_schedule", {"unitId": unit_id})
+    guard.after_tool(
+        observation={"status": "ok"},
+        data={
+            "rentals": [
+                {
+                    "orderCode": "ORD-001",
+                    "orderStatus": "ACTIVE",
+                    "occupiedFrom": "2026-10-22T08:00:00Z",
+                    "occupiedUntil": "2026-10-23T08:00:00Z",
+                }
+            ],
+            "items": [
+                {
+                    "blockType": "CLEANING",
+                    "status": "PLANNED",
+                    "blockedFrom": "2026-10-23T08:00:00Z",
+                    "blockedUntil": "2026-10-23T20:00:00Z",
+                }
+            ],
+        },
+        observed_at=datetime.now(UTC),
+        permission_decision="allowed",
+    )
+
+    answer = render_grounded_answer(goal, guard.observations, "fallback")
+
+    assert "ORD-001" in answer
+    assert "CLEANING" in answer
     assert "fallback" not in answer
 
 

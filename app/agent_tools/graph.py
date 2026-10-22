@@ -66,7 +66,16 @@ _READ_TOOL_ALLOWLIST = frozenset(
 def _direct_read_request(goal: AgentGoalSpec) -> tuple[str, dict[str, Any]] | None:
     """Use validated goal inputs for a single authoritative read, without a model loop."""
     values = goal.extracted_inputs
-    if goal.missing_inputs or len(goal.required_tools) != 1:
+    if goal.missing_inputs:
+        return None
+    if (
+        goal.goal_type in {AgentGoalType.RENTAL_ORDER_LOOKUP, AgentGoalType.PAYMENT_SUMMARY}
+        and goal.required_tools[0] == "find_rental_orders"
+        and len(goal.required_tools) == 2
+        and isinstance(values.get("search"), str)
+    ):
+        return "find_rental_orders", {"search": values["search"], "pageSize": 10}
+    if len(goal.required_tools) != 1:
         return None
     tool_name = goal.required_tools[0]
     if tool_name not in goal.constraints.allowed_tools:
@@ -446,7 +455,36 @@ async def run_graph_turn(
     direct_request = _direct_read_request(goal)
     if direct_request is not None:
         tool_name, arguments = direct_request
-        await studio_read(tool_name, arguments)
+        raw_result = await studio_read(tool_name, arguments)
+        if tool_name == "find_rental_orders" and len(goal.required_tools) == 2:
+            result_data = json.loads(raw_result)
+            page = result_data.get("data") if isinstance(result_data, dict) else None
+            items = page.get("items") if isinstance(page, dict) else None
+            requested_code = str(goal.extracted_inputs["search"]).casefold()
+            matches = (
+                [
+                    item
+                    for item in items
+                    if isinstance(items, list)
+                    and isinstance(item, dict)
+                    and str(item.get("orderCode", "")).casefold() == requested_code
+                ]
+                if isinstance(items, list)
+                else []
+            )
+            if len(matches) == 1 and isinstance(matches[0].get("id"), str):
+                await studio_read(goal.required_tools[1], {"orderId": matches[0]["id"]})
+            elif not matches and guard.observations[-1].status == "ok":
+                return stopped(
+                    f"Không tìm thấy đơn có mã {goal.extracted_inputs['search']} "
+                    "tại chi nhánh này.",
+                    AgentTerminationReason.INSUFFICIENT_DATA,
+                )
+            elif len(matches) > 1:
+                return stopped(
+                    "Có nhiều đơn trùng mã trong kết quả; cần nhân viên đối chiếu.",
+                    AgentTerminationReason.INSUFFICIENT_DATA,
+                )
         answer = render_grounded_answer(
             goal,
             guard.observations,

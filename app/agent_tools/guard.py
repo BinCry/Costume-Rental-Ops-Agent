@@ -805,7 +805,14 @@ def render_grounded_answer(
 ) -> str:
     """Render live operational facts deterministically instead of trusting prose claims."""
     successful = {item.tool_name: item for item in observations if item.status == "ok"}
-    tool_name = goal.required_tools[0] if len(goal.required_tools) == 1 else None
+    tool_name = (
+        goal.required_tools[-1]
+        if goal.goal_type in {AgentGoalType.RENTAL_ORDER_LOOKUP, AgentGoalType.PAYMENT_SUMMARY}
+        and goal.required_tools[-1] in {"get_rental_order", "get_payment_summary"}
+        else goal.required_tools[0]
+        if len(goal.required_tools) == 1
+        else None
+    )
     observation = successful.get(tool_name) if tool_name is not None else None
     if observation is None or not isinstance(observation.data, dict):
         return fallback
@@ -876,9 +883,19 @@ def render_grounded_answer(
     if goal.goal_type is AgentGoalType.UNIT_SCHEDULE:
         items_value = data.get("items")
         items = items_value if isinstance(items_value, list) else []
-        if not items:
-            return "Không có khoảng tạm ngưng cho thuê nào trong lịch đã tra cứu."
+        rentals_value = data.get("rentals")
+        rentals = rentals_value if isinstance(rentals_value, list) else []
+        if not items and not rentals:
+            return "Không có lịch thuê hoặc khoảng tạm ngưng nào trong thời gian đã tra cứu."
         lines = []
+        for rental in rentals[:20]:
+            if not isinstance(rental, dict):
+                continue
+            label = rental.get("orderCode") or "Đơn tại chi nhánh khác"
+            lines.append(
+                f"- Thuê {label} ({rental.get('orderStatus')}): "
+                f"{rental.get('occupiedFrom')} đến {rental.get('occupiedUntil')}."
+            )
         for item in items[:20]:
             if not isinstance(item, dict):
                 continue
@@ -886,7 +903,7 @@ def render_grounded_answer(
                 f"- {item.get('blockType')} ({item.get('status')}): "
                 f"{item.get('blockedFrom')} đến {item.get('blockedUntil')}."
             )
-        return "Các khoảng tạm ngưng cho thuê trong lịch:\n" + "\n".join(lines)
+        return "Lịch thuê và khoảng tạm ngưng của bộ:\n" + "\n".join(lines)
     return fallback
 
 
