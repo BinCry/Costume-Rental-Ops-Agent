@@ -1045,6 +1045,78 @@ def test_live_answer_is_rendered_from_authoritative_observation() -> None:
     assert "Sai trạng thái" not in answer
 
 
+def test_transfer_lookup_uses_scoped_branch_role_without_exposing_branch_uuids() -> None:
+    transfer_id = "00000000-0000-4000-8000-000000000762"
+    goal = infer_goal(
+        f"Kiểm tra trạng thái phiếu điều chuyển {transfer_id} bằng dữ liệu trực tiếp từ Studio."
+    )
+    guard = ExecutionGuard(max_tool_calls=1, remaining_case_steps=1)
+    guard.before_tool("get_stock_transfer", {"transferId": transfer_id})
+    transfer = {
+        "id": transfer_id,
+        "transferCode": "TRF-DEMO-IN-TRANSIT",
+        "status": "IN_TRANSIT",
+        "version": 2,
+        "caseBranchRole": "FROM",
+    }
+    guard.after_tool(
+        observation={"status": "ok", "data": transfer},
+        evidence_refs=(transfer_id,),
+        data=transfer,
+        observed_at=datetime.now(UTC),
+        permission_decision="allowed",
+    )
+
+    answer = render_grounded_answer(goal, guard.observations, "fallback")
+    verification = verify_completion(
+        user_message=goal.summary,
+        answer=answer,
+        evidence_count=1,
+        tool_calls=1,
+        goal=goal,
+        observations=guard.observations,
+    )
+
+    assert verification.achieved
+    assert "TRF-DEMO-IN-TRANSIT" in answer
+    assert "IN_TRANSIT" in answer
+    assert "chi nhánh gửi" in answer
+    assert transfer_id not in answer
+
+
+def test_transfer_lookup_requires_authoritative_branch_scope() -> None:
+    transfer_id = "00000000-0000-4000-8000-000000000762"
+    goal = infer_goal(f"Kiểm tra phiếu điều chuyển {transfer_id}")
+    guard = ExecutionGuard(max_tool_calls=1, remaining_case_steps=1)
+    guard.before_tool("get_stock_transfer", {"transferId": transfer_id})
+    transfer = {
+        "id": transfer_id,
+        "transferCode": "TRF-DEMO-IN-TRANSIT",
+        "status": "IN_TRANSIT",
+        "version": 2,
+    }
+    guard.after_tool(
+        observation={"status": "ok", "data": transfer},
+        evidence_refs=(transfer_id,),
+        data=transfer,
+        observed_at=datetime.now(UTC),
+        permission_decision="allowed",
+    )
+
+    verification = verify_completion(
+        user_message=goal.summary,
+        answer="Phiếu đang điều chuyển.",
+        evidence_count=1,
+        tool_calls=1,
+        goal=goal,
+        observations=guard.observations,
+    )
+
+    assert not verification.achieved
+    assert verification.reason is AgentTerminationReason.VERIFICATION_FAILED
+    assert verification.message == "Kết quả điều chuyển thiếu trạng thái hoặc phạm vi chi nhánh."
+
+
 def test_order_search_answer_shows_order_facts_instead_of_only_count() -> None:
     goal = infer_goal("Tìm đơn thuê có mã RT-1024")
     guard = ExecutionGuard(max_tool_calls=1, remaining_case_steps=1)

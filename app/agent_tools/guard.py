@@ -783,7 +783,15 @@ def _domain_predicate(
             return "Kết quả lịch unit không có danh sách hợp lệ."
     elif goal.goal_type is AgentGoalType.STOCK_TRANSFER_LOOKUP:
         observation = by_tool["get_stock_transfer"]
-        if not _has_fields(observation.data, "id", "status", "fromBranchId", "toBranchId"):
+        data = observation.data
+        has_scoped_role = isinstance(data, dict) and data.get("caseBranchRole") in {
+            "FROM",
+            "TO",
+        }
+        has_branch_ids = _has_fields(data, "fromBranchId", "toBranchId")
+        if not _has_fields(data, "id", "status") or not (
+            has_scoped_role or has_branch_ids
+        ):
             return "Kết quả điều chuyển thiếu trạng thái hoặc phạm vi chi nhánh."
 
     if goal.required_identifiers:
@@ -861,9 +869,19 @@ def render_grounded_answer(
         availability = "còn" if data.get("available") is True else "không còn"
         return f"Khoảng thời gian yêu cầu {availability} bộ phù hợp; số bộ khả dụng: {len(units)}."
     if goal.goal_type is AgentGoalType.STOCK_TRANSFER_LOOKUP:
+        transfer_label = data.get("transferCode") or data.get("id")
+        branch_role = {
+            "FROM": "chi nhánh gửi",
+            "TO": "chi nhánh nhận",
+        }.get(data.get("caseBranchRole"))
+        if branch_role:
+            return (
+                f"Phiếu điều chuyển {transfer_label} đang ở trạng thái {data.get('status')}. "
+                f"Chi nhánh đang làm việc là {branch_role}."
+            )
         return (
-            f"Phiếu điều chuyển {data.get('id')} đang ở trạng thái {data.get('status')}, "
-            f"từ chi nhánh {data.get('fromBranchId')} đến {data.get('toBranchId')}."
+            f"Phiếu điều chuyển {transfer_label} đang ở trạng thái {data.get('status')}. "
+            "Phiếu thuộc phạm vi chi nhánh được cấp quyền."
         )
     if goal.goal_type is AgentGoalType.RENTAL_ORDER_SEARCH:
         items_value = data.get("items")
